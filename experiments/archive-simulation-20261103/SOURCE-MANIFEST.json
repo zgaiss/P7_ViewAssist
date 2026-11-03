@@ -1,0 +1,182 @@
+{
+  "native-v12/ic_backup_budget.c": {
+    "sha256": "51c744a2e0a07dee2574862fcc6e710bc4ba2586d3b1a308774cb3e389f30bfe",
+    "source_component": "p7_v12/resource-integrated/pinned/ic_backup_budget.c"
+  },
+  "native-v12/ic_backup_budget.h": {
+    "sha256": "e14ea63e86ce05ef62136002cecec9aadebddbcf4b1680d0c05d95878a954019",
+    "source_component": "p7_v12/resource-integrated/pinned/ic_backup_budget.h"
+  },
+  "native-v12/ic_decoder.c": {
+    "sha256": "1197343b51dc327088ccffdedcdaa0f90556c6d358fe9542b08af84399ad5d87",
+    "source_component": "p7_v12/resource-integrated/pinned/ic_decoder.c"
+  },
+  "native-v12/ic_decoder.h": {
+    "sha256": "7a1e91e0ea7556ada006f6e6377964d5ac08d3c99d5f5df05b032cffce962907",
+    "source_component": "p7_v12/resource-integrated/pinned/ic_decoder.h"
+  },
+  "native-v12/ic_display.h": {
+    "sha256": "d2cb48b2926fa648b4559fe9f626bc44d7644c29470b497e3cc793201e303f69",
+    "source_component": "p7_v12/resource-integrated/pinned/ic_display.h"
+  },
+  "native-v12/ic_dma_budget.h": {
+    "sha256": "5aa71ab71406b9e0d1334d72dc5f29d30c927e4e02ae2c68660044e592a8740d",
+    "source_component": "p7_v12/resource-integrated/pinned/ic_dma_budget.h"
+  },
+  "native-v12/ic_pixels.c": {
+    "sha256": "11d5731c5dd2a7d07d5389b26fa85aa46adc224b9d42415e42cfa996ba93cb21",
+    "source_component": "p7_v12/resource-integrated/pinned/ic_pixels.c"
+  },
+  "native-v12/ic_pixels.h": {
+    "sha256": "6744c8e657254542a49dfcbec174325519ba355be8625e214a85e2956d3d887b",
+    "source_component": "p7_v12/resource-integrated/pinned/ic_pixels.h"
+  },
+  "native-v12/ic_preflight.c": {
+    "sha256": "5fda75c7beccbf5a2f0a121efd3c67f56317c72ccf5cd3d89919e46eb7d76147",
+    "source_component": "p7_v12/resource-integrated/pinned/ic_preflight.c"
+  },
+  "native-v12/ic_preflight.h": {
+    "sha256": "3b1122baf0c0ce39e2c9aebfea8c8a4ea0746ad432fb238fa297fd05e6ba2333",
+    "source_component": "p7_v12/resource-integrated/pinned/ic_preflight.h"
+  },
+  "native-v12/ic_protocol.c": {
+    "sha256": "8c8af2e3b99a2d98f1fbfd18e85a82eeb44200aa26125ff531329963f984157d",
+    "source_component": "p7_v12/resource-integrated/pinned/ic_protocol.c"
+  },
+  "native-v12/ic_protocol.h": {
+    "sha256": "2dd7a27d823a9de7af0cae7cab006347a99afa1400413d5342dd601298d314f8",
+    "source_component": "p7_v12/resource-integrated/pinned/ic_protocol.h"
+  },
+  "native-v12/ic_receiver.c": {
+    "sha256": "3fa13cdcf626fb8a3af1f6f76bfbe8e4fc6d63a2529c16c8a461ce422b7231b6",
+    "source_component": "p7_v12/resource-integrated/pinned/ic_receiver.c"
+  },
+  "native-v12/ic_receiver_candidate.c": {
+    "sha256": "8ab7d38f75f0255e25a62049b353b9eac984a31af9b385a868565ca8b604d2e5",
+    "source_component": "p7_v12/resource-integrated/pinned/ic_receiver_candidate.c"
+  },
+  "native-v12/mailbox_impl.inc": {
+    "sha256": "39d99aeff5364390e37c471cf228508cbf8dbcd2824b4fcedf61e3574fc243f7",
+    "source_component": "p7_v12/resource-integrated/pinned/mailbox_impl.inc"
+  },
+  "android-editor-observer/CameraLifecycle.java": {
+    "sha256": "91858ca5a698466d71c72bf5731f5861f1913b5ba896e5c8ed4815cbc8435b8e",
+    "source_component": "p7_editor_observer_candidate/candidate/inputs/service-candidate/CameraLifecycle.java"
+  },
+  "android-editor-observer/CameraOverlayService.java": {
+    "sha256": "324d5e519149809cd984603d7481b1da2b501549ce2c99c723336948d5c0c672",
+    "source_component": "p7_editor_observer_candidate/candidate/inputs/service-candidate/CameraOverlayService.java"
+  },
+  "android-editor-observer/TargetRetirement.java": {
+    "sha256": "384d9d0a109999d807c01cc19cdcd2350a94ea8797b31a19655387b91c5d47ee",
+    "source_component": "p7_editor_observer_candidate/candidate/inputs/service-candidate/TargetRetirement.java"
+  },
+  "android-editor-observer/ICLinkProjector.java": {
+    "sha256": "b1cceeeafb9db363138398bf423e967c1c6ca7bb88236f925e76ce5fec9b553a",
+    "source_component": "p7_editor_observer_candidate/candidate/inputs/codec-contained/src/com/xiaopeng/qa/camera/ICLinkProjector.java"
+  },
+  "android-editor-observer/ICLinkProtocol.java": {
+    "sha256": "b5a71d44d45fb748673278d6c7456f5431ce1311f01d10ad6a2619839341a07c",
+    "source_component": "p7_editor_observer_candidate/candidate/inputs/codec-contained/src/com/xiaopeng/qa/camera/ICLinkProtocol.java"
+  },
+  "recovery-host/bridge.py": {
+    "sha256": "f1a5c1ed1ba3ffde72a0ec0ed103197b9dadbfe47b1873ff48cac25dce47ee15",
+    "source_component": "p7_composed_recovery/bridge.py"
+  },
+  "recovery-host/sealed.py": {
+    "sha256": "aafebe54c2761fb6c5bd9d5cdfe80a50c38574179ee5eb13fcecb80bd65389c4",
+    "source_component": "p7_composed_recovery/sealed.py"
+  },
+  "recovery-host/supervisor.py": {
+    "sha256": "e92fc1fa56bfc62dfb47ef6a44e21af749a3a3055d7aeb1248d98722d9f1571d",
+    "source_component": "p7_composed_recovery/supervisor.py"
+  },
+  "recovery-host/observe.py": {
+    "sha256": "1b326eef0b774280ac7596262971559f56bc62aaf12fa9609c2f7b226f6894b8",
+    "source_component": "p7_composed_recovery/observe.py"
+  },
+  "recovery-host/ownership.c": {
+    "sha256": "6c7495ed839d6c34a467fe90b5dc8e75c56c4e3a0b8a2d3d74e06ff91d73271b",
+    "source_component": "p7_composed_recovery/ownership.c"
+  },
+  "recovery-host/display_bridge.c": {
+    "sha256": "9c024ff8f92605bcb65431349795bba000c0765e7c7d662060895237f8926e8d",
+    "source_component": "p7_composed_recovery/display_bridge.c"
+  },
+  "recovery-host/production_host.c": {
+    "sha256": "75e69d2d80774035f9cb058ebf73617f2874be104ed1310a4f5790efdf736b64",
+    "source_component": "p7_composed_recovery/production_host.c"
+  },
+  "recovery-host/bridge_entry.inc": {
+    "sha256": "463463ca45b31704b56fff8e93e1ac16a822bb8ba139c2c1c51182db09b5112d",
+    "source_component": "p7_composed_recovery/bridge_entry.inc"
+  },
+  "recovery-host/bridge_state.inc": {
+    "sha256": "ff39ba3fc08d9e1a483f44b33f7b5b4eb00a4f20206e9bd6817522ff1f1bede3",
+    "source_component": "p7_composed_recovery/bridge_state.inc"
+  },
+  "recovery-host/pinned/ic_backup_budget.c": {
+    "sha256": "51c744a2e0a07dee2574862fcc6e710bc4ba2586d3b1a308774cb3e389f30bfe",
+    "source_component": "p7_composed_recovery/pinned/ic_backup_budget.c"
+  },
+  "recovery-host/pinned/ic_backup_budget.h": {
+    "sha256": "e14ea63e86ce05ef62136002cecec9aadebddbcf4b1680d0c05d95878a954019",
+    "source_component": "p7_composed_recovery/pinned/ic_backup_budget.h"
+  },
+  "recovery-host/pinned/ic_decoder.c": {
+    "sha256": "1197343b51dc327088ccffdedcdaa0f90556c6d358fe9542b08af84399ad5d87",
+    "source_component": "p7_composed_recovery/pinned/ic_decoder.c"
+  },
+  "recovery-host/pinned/ic_decoder.h": {
+    "sha256": "7a1e91e0ea7556ada006f6e6377964d5ac08d3c99d5f5df05b032cffce962907",
+    "source_component": "p7_composed_recovery/pinned/ic_decoder.h"
+  },
+  "recovery-host/pinned/ic_display.c": {
+    "sha256": "4a7c38e944ef6b221955ba7d8e5e124e75df72b80b61a1384bff173df14e1615",
+    "source_component": "p7_composed_recovery/pinned/ic_display.c"
+  },
+  "recovery-host/pinned/ic_display.h": {
+    "sha256": "d2cb48b2926fa648b4559fe9f626bc44d7644c29470b497e3cc793201e303f69",
+    "source_component": "p7_composed_recovery/pinned/ic_display.h"
+  },
+  "recovery-host/pinned/ic_dma_budget.h": {
+    "sha256": "5aa71ab71406b9e0d1334d72dc5f29d30c927e4e02ae2c68660044e592a8740d",
+    "source_component": "p7_composed_recovery/pinned/ic_dma_budget.h"
+  },
+  "recovery-host/pinned/ic_pixels.c": {
+    "sha256": "11d5731c5dd2a7d07d5389b26fa85aa46adc224b9d42415e42cfa996ba93cb21",
+    "source_component": "p7_composed_recovery/pinned/ic_pixels.c"
+  },
+  "recovery-host/pinned/ic_pixels.h": {
+    "sha256": "6744c8e657254542a49dfcbec174325519ba355be8625e214a85e2956d3d887b",
+    "source_component": "p7_composed_recovery/pinned/ic_pixels.h"
+  },
+  "recovery-host/pinned/ic_preflight.c": {
+    "sha256": "5fda75c7beccbf5a2f0a121efd3c67f56317c72ccf5cd3d89919e46eb7d76147",
+    "source_component": "p7_composed_recovery/pinned/ic_preflight.c"
+  },
+  "recovery-host/pinned/ic_preflight.h": {
+    "sha256": "3b1122baf0c0ce39e2c9aebfea8c8a4ea0746ad432fb238fa297fd05e6ba2333",
+    "source_component": "p7_composed_recovery/pinned/ic_preflight.h"
+  },
+  "recovery-host/pinned/ic_protocol.c": {
+    "sha256": "8c8af2e3b99a2d98f1fbfd18e85a82eeb44200aa26125ff531329963f984157d",
+    "source_component": "p7_composed_recovery/pinned/ic_protocol.c"
+  },
+  "recovery-host/pinned/ic_protocol.h": {
+    "sha256": "2dd7a27d823a9de7af0cae7cab006347a99afa1400413d5342dd601298d314f8",
+    "source_component": "p7_composed_recovery/pinned/ic_protocol.h"
+  },
+  "recovery-host/pinned/ic_receiver.c": {
+    "sha256": "3fa13cdcf626fb8a3af1f6f76bfbe8e4fc6d63a2529c16c8a461ce422b7231b6",
+    "source_component": "p7_composed_recovery/pinned/ic_receiver.c"
+  },
+  "recovery-host/pinned/ic_receiver_candidate.c": {
+    "sha256": "8ab7d38f75f0255e25a62049b353b9eac984a31af9b385a868565ca8b604d2e5",
+    "source_component": "p7_composed_recovery/pinned/ic_receiver_candidate.c"
+  },
+  "recovery-host/pinned/mailbox_impl.inc": {
+    "sha256": "39d99aeff5364390e37c471cf228508cbf8dbcd2824b4fcedf61e3574fc243f7",
+    "source_component": "p7_composed_recovery/pinned/mailbox_impl.inc"
+  }
+}
