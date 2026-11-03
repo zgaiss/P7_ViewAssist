@@ -94,6 +94,7 @@ static int reap_guardian(pid_t pid){
 struct au { unsigned char *p; size_t n; };
 struct auq { pthread_mutex_t m; pthread_cond_t c; struct au item[AQ_CAP]; int head,tail,count,done,need_idr,dropped; };
 static void auq_init(struct auq*q){memset(q,0,sizeof(*q));pthread_mutex_init(&q->m,NULL);pthread_cond_init(&q->c,NULL);}
+static int auq_dropped(struct auq*q){pthread_mutex_lock(&q->m);int n=q->dropped;pthread_mutex_unlock(&q->m);return n;}
 static void auq_clear(struct auq*q){while(q->count){free(q->item[q->head].p);q->head=(q->head+1)%AQ_CAP;q->count--;}}
 static void auq_push(struct auq*q,unsigned char*p,size_t n,int idr){
     pthread_mutex_lock(&q->m);
@@ -141,8 +142,8 @@ static int session(int client,int listener,const unsigned char key[32],uint64_t 
     close(pipefd[0]);struct output output={pipefd[1],settings,NULL};
     output.rgb=malloc(IC_RGB_BYTES);int fatal=!output.rgb;
     struct auq q;auq_init(&q);
-    struct reader_arg ra={client,end,&q};pthread_t reader;
-    if(!fatal&&pthread_create(&reader,NULL,reader_main,&ra))fatal=1;
+    struct reader_arg ra={client,end,&q};pthread_t reader;int reader_started=0;
+    if(!fatal){if(pthread_create(&reader,NULL,reader_main,&ra))fatal=1;else reader_started=1;}
     ic_decoder*decoder=NULL;struct au batch[AQ_CAP];long long batch_sum=0;int batch_n=0;
     while(!fatal){
         int n=0,got=0;
@@ -154,13 +155,17 @@ static int session(int client,int listener,const unsigned char key[32],uint64_t 
         for(int i=start;!fatal&&i<n;i++)if(ic_decoder_push(decoder,batch[i].p,batch[i].n))fatal=1;
         if(!fatal&&decoder&&n>start&&ic_decoder_decode(decoder))fatal=1;
         long long dt=ic_now_ms()-t0;batch_sum+=dt;batch_n++;
-        if(batch_n%10==0)fprintf(stderr,"IC_FEED batch_n=%d last_batch=%d avg_ms=%lld queue_max=%d dropped=%d\n",batch_n,n,batch_sum/batch_n,AQ_CAP,q.dropped);
+        if(batch_n%10==0)fprintf(stderr,"IC_FEED batch_n=%d last_batch=%d avg_ms=%lld queue_max=%d dropped=%d\n",batch_n,n,batch_sum/batch_n,AQ_CAP,auq_dropped(&q));
         for(int i=0;i<n;i++)free(batch[i].p);
     }
     if(fatal)stopping=1;
     shutdown(client,SHUT_RDWR);
-    pthread_join(reader,NULL);
-    fprintf(stderr,"IC_SESSION batches=%d dropped=%d\n",batch_n,q.dropped);
+    /* No teardown while the reader may still own stack/queue storage.
+     * Process fail-stop closes the pipe; independent guardian retains its lease. */
+    if(reader_started&&pthread_join(reader,NULL)){
+        fprintf(stderr,"FATAL reader join unconfirmed; exit before dependent teardown\n");_exit(74);
+    }
+    fprintf(stderr,"IC_SESSION batches=%d dropped=%d\n",batch_n,auq_dropped(&q));
     close(pipefd[1]);
     if(decoder&&ic_decoder_close(decoder))fatal=1;
     if(reap_guardian(child))fatal=1;

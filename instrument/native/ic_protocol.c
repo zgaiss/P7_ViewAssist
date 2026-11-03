@@ -21,14 +21,14 @@ static int transfer(int fd,void *buf,size_t n,unsigned ms,int writing){
 int ic_read_exact(int fd,void*b,size_t n,unsigned ms){return transfer(fd,b,n,ms,0);}
 int ic_write_exact(int fd,const void*b,size_t n,unsigned ms){return transfer(fd,(void*)b,n,ms,1);}
 static uint32_t be32(const unsigned char*p){return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];}
-int ic_parse_hello(const unsigned char*b,const unsigned char*key,struct ic_session*s){
+int ic_parse_hello(const unsigned char b[IC_HELLO_BYTES],const unsigned char key[32],struct ic_session*s){
     unsigned mismatch=0;for(unsigned i=0;i<32;i++)mismatch|=b[8+i]^key[i];
     if(memcmp(b,"P7IC0001",8)||mismatch)return -1;
     s->side=be32(b+40);s->crop_x=be32(b+44);s->crop_y=be32(b+48);s->crop_w=be32(b+52);s->crop_h=be32(b+56);
     if((s->side!=1&&s->side!=2)||!s->crop_w||!s->crop_h||s->crop_w>1280||s->crop_h>720||s->crop_x>1280-s->crop_w||s->crop_y>720-s->crop_h)return -1;
     return 0;
 }
-int ic_parse_packet(const unsigned char*b,size_t*len,uint64_t*pts){
+int ic_parse_packet(const unsigned char b[16],size_t*len,uint64_t*pts){
     *len=be32(b+4);*pts=((uint64_t)be32(b+8)<<32)|be32(b+12);
     return be32(b)!=1||!*len||*len>IC_MAX_AU||(*pts>>63)?-1:0;
 }
