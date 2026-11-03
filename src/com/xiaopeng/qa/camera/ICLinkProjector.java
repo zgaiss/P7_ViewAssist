@@ -3,260 +3,237 @@ package com.xiaopeng.qa.camera;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
+import android.os.Bundle;
 import android.util.Log;
 import android.view.Surface;
-
-import java.io.OutputStream;
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.nio.ByteBuffer;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * v1.57 beta3：仪表 H.264 投影模块（ICLinkProjector）。
- *
- * 车机侧把浮窗当前影像（Camera2 预览会话中追加的编码器 input Surface）经
- * MediaCodec H.264 硬编 + TCP 推流到仪表侧（仪表 172.20.1.40:9000，仪表侧独立解码写屏）。
- *
- * 分帧协议：4 字节大端长度头 + H.264 Annex-B ES（MediaCodec 输出即 Annex-B，
- * 直接切帧加长度头发送）。
- *
- * 容错红线：编码器创建失败 / socket 连接失败 / 推流中 IO 异常，一律 try-catch
- * 静默降级（仅记录日志），绝不 crash、绝不阻塞或影响浮窗主流程。
+/** Experimental native-VPU receiver client. Raw Camera2 stream, NOT TextureView crop.
+ * A session belongs to exactly one side; switching closes it and starts at a new IDR.
+ * No arbitrary P-frame dropping: congestion abandons the GOP and requests an IDR.
  */
 public class ICLinkProjector {
-
     private static final String TAG = "ICLinkProjector";
-
-    // ---- 编码参数（与仪表侧联调后可能调整）----
-    private static final int ENC_WIDTH = 1280;
-    private static final int ENC_HEIGHT = 720;
-    private static final int ENC_BIT_RATE = 2_000_000;      // 2 Mbps
-    private static final int ENC_FRAME_RATE = 15;
-    private static final int ENC_I_FRAME_INTERVAL = 1;      // 1 秒一个 IDR 关键帧
-    private static final int DEQUEUE_TIMEOUT_US = 10_000;
-
-    // ---- 帧通道参数（待仪表侧锁定帧通道后对齐）----
-    public static String DEFAULT_HOST = "172.20.1.40";
-    public static int DEFAULT_PORT = 9000;
-    private static final int CONNECT_TIMEOUT_MS = 3000;
-    /** 发送队列容量：防背压（队列满丢最旧帧保最新），不阻塞编码线程。 */
-    private static final int QUEUE_CAPACITY = 8;
-    private static final long SEND_POLL_MS = 200L;
-
-    private final AtomicBoolean running = new AtomicBoolean(false);
-    private final Object lock = new Object();
-    private final ArrayBlockingQueue<byte[]> frameQueue = new ArrayBlockingQueue<>(QUEUE_CAPACITY);
-
-    private MediaCodec codec;
-    private Surface inputSurface;
-    private Socket socket;
-    private OutputStream out;
-    private Thread pushThread;
-    private Thread sendThread;
-
-    /** 返回编码器 input Surface，供 Camera2 预览会话追加（编码器未就绪时返回 null）。 */
-    public Surface getInputSurface() {
-        synchronized (lock) {
-            return inputSurface;
-        }
+    public static final String DEFAULT_HOST = "172.20.1.40";
+    public static final int DEFAULT_PORT = 9000;
+    private volatile Session session;
+    private volatile Runnable failureListener;
+    public void setFailureListener(Runnable listener) { failureListener=listener; }
+    private static final class Frame {
+        final byte[] data; final long pts, queuedNs = System.nanoTime();
+        Frame(byte[] b, long p) { data=b; pts=p; }
     }
-
-    public boolean isRunning() {
-        return running.get();
+    private static final class Session {
+        volatile boolean running = true, needIdr = true, networkFailed;
+        final ArrayBlockingQueue<Frame> queue = new ArrayBlockingQueue<>(3);
+        final Socket socket = new Socket();
+        MediaCodec codec; Surface surface; Thread push, send, watchdog;
+        volatile long writeStartedNs, connectedNs;
+        int side;
     }
-
-    /**
-     * 启动投影：同步创建 H.264 编码器 + input Surface（耗时短），
-     * socket 连接在后台推流线程内异步完成（失败静默降级，不阻塞调用方）。
-     * 幂等：已启动时直接返回。
-     */
-    public void start(String host, int port) {
-        synchronized (lock) {
-            if (running.get()) {
-                return;
-            }
+    private static final class Opened {
+        final MediaCodec codec; final Surface surface;
+        Opened(MediaCodec c, Surface s) { codec=c; surface=s; }
+    }
+    /** The vendor c2.qti encoder ignores the Baseline hint and emits High/CABAC,
+     *  which the instrument gate rejects before touching the VPU. Prefer the
+     *  platform software encoder, which honors Baseline; fall back to the vendor
+     *  encoder only if neither software codec can be configured. */
+    private static MediaFormat encoderFormat() {
+        MediaFormat fmt=MediaFormat.createVideoFormat("video/avc",320,240);
+        fmt.setInteger(MediaFormat.KEY_BIT_RATE,800_000);
+        fmt.setInteger(MediaFormat.KEY_FRAME_RATE,30);
+        fmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL,1);
+        fmt.setInteger(MediaFormat.KEY_PROFILE,MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline);
+        fmt.setInteger(MediaFormat.KEY_LEVEL,MediaCodecInfo.CodecProfileLevel.AVCLevel31);
+        fmt.setInteger(MediaFormat.KEY_MAX_B_FRAMES,0);
+        fmt.setInteger(MediaFormat.KEY_COLOR_FORMAT,MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+        return fmt;
+    }
+    private static Opened openEncoder() throws IOException {
+        Throwable last=null;
+        for(String name:new String[]{"c2.android.avc.encoder","OMX.google.h264.encoder",null}) {
+            MediaCodec c=null;
             try {
-                MediaCodec c = MediaCodec.createEncoderByType("video/avc");
-                MediaFormat fmt = MediaFormat.createVideoFormat("video/avc", ENC_WIDTH, ENC_HEIGHT);
-                fmt.setInteger(MediaFormat.KEY_BIT_RATE, ENC_BIT_RATE);
-                fmt.setInteger(MediaFormat.KEY_FRAME_RATE, ENC_FRAME_RATE);
-                fmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, ENC_I_FRAME_INTERVAL);
-                fmt.setInteger(MediaFormat.KEY_COLOR_FORMAT,
-                        MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-                c.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-                Surface s = c.createInputSurface();
+                c = name==null ? MediaCodec.createEncoderByType("video/avc") : MediaCodec.createByCodecName(name);
+                c.configure(encoderFormat(),null,null,MediaCodec.CONFIGURE_FLAG_ENCODE);
+                Surface surface=c.createInputSurface();
                 c.start();
-
-                Socket sk = new Socket();
-                codec = c;
-                inputSurface = s;
-                socket = sk;
-                out = null;
-                running.set(true);
-
-                pushThread = new Thread(() -> pushLoop(), "icl-push");
-                sendThread = new Thread(() -> sendLoop(host, port), "icl-send");
-                pushThread.start();
-                sendThread.start();
-                Log.i(TAG, "ICLinkProjector started: " + host + ":" + port
-                        + " enc=" + ENC_WIDTH + "x" + ENC_HEIGHT + "@" + ENC_FRAME_RATE + "fps");
-            } catch (Throwable t) {
-                // 编码器创建失败：静默降级，绝不 crash
-                Log.w(TAG, "start failed, silent fallback: " + t.getMessage());
-                releaseInternal();
+                Log.i(TAG,"instrument encoder="+(name==null?"default":name));
+                return new Opened(c,surface);
+            } catch(Throwable e) {
+                last=e;
+                if(c!=null) { try { c.release(); } catch(Throwable ignored) {} }
             }
         }
+        throw new IOException("no usable AVC encoder",last);
     }
+    /** Profile/level of the first SPS, or null when no complete SPS is present. */
+    private static int[] spsProfileLevel(byte[] annexB) {
+        for(int i=0;i+3<annexB.length;) {
+            int sc = annexB[i]==0&&annexB[i+1]==0&&annexB[i+2]==1 ? 3
+                    : annexB[i]==0&&annexB[i+1]==0&&annexB[i+2]==0&&annexB[i+3]==1 ? 4 : 0;
+            if(sc==0) { i++; continue; }
+            int o=i+sc;
+            if(o+3>=annexB.length) return null;
+            if((annexB[o]&31)==7) return new int[]{annexB[o+1]&255,annexB[o+3]&255};
+            i=o+1;
+        }
+        return null;
+    }
+    private static String headHex(byte[] b) {
+        StringBuilder s=new StringBuilder();
+        for(int i=0;i<b.length&&i<32;i++)s.append(String.format("%02x",b[i]&255));
+        return s.toString();
+    }
+    public Surface getInputSurface() { Session s=session; return s == null || !s.running ? null : s.surface; }
+    public boolean isRunning() { Session s=session; return s != null && s.running; }
+    public boolean isForSide(int side) { Session s=session; return s != null && s.running && s.side==side; }
 
-    /**
-     * 停止投影（幂等，可重复调用）：停止推流线程、释放编码器、关闭 socket。
-     * 多次打灯循环（弹窗→收窗→再弹）不得泄漏编码器/socket/线程；
-     * stop 后再次 show 可重新启动。
-     */
-    public void stop() {
-        Thread p;
-        Thread s;
-        synchronized (lock) {
-            if (!running.get()) {
-                return;
-            }
-            running.set(false);
-            p = pushThread;
-            s = sendThread;
-            frameQueue.clear();
-            // 关闭 socket 以唤醒 sendLoop 可能的写阻塞 / connect 阻塞
-            try {
-                if (socket != null) {
-                    socket.close();
+    public synchronized void start(String host, int port, int side, int[] crop, String token) {
+        if(session!=null)throw new IllegalStateException("retire old camera target before starting another encoder");
+        Session s = new Session(); s.side=side;
+        try {
+            ICLinkProtocol.validateCrop(crop); ICLinkProtocol.token(token);
+            Opened opened=openEncoder();
+            s.codec=opened.codec; s.surface=opened.surface; session=s;
+            s.push=new Thread(() -> pushLoop(s),"icl-encode");
+            s.send=new Thread(() -> sendLoop(s,host,port,crop.clone(),token),"icl-network");
+            s.watchdog=new Thread(() -> watchdog(s),"icl-write-lease");
+            s.push.start(); s.send.start(); s.watchdog.start();
+        } catch (Throwable e) { fail(s,e); if(session==s)session=null; dispose(s); }
+    }
+    private static void requestIdr(Session s) {
+        try { Bundle b=new Bundle(); b.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME,0); s.codec.setParameters(b); }
+        catch(Throwable e) { Log.w(TAG,"IDR request failed",e); }
+    }
+    private void pushLoop(Session s) {
+        byte[] config=new byte[0]; MediaCodec.BufferInfo info=new MediaCodec.BufferInfo();
+        boolean checked=false;
+        try {
+            while(s.running) {
+                int index=s.codec.dequeueOutputBuffer(info,10_000);
+                if(index==MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    MediaFormat fmt=s.codec.getOutputFormat();
+                    byte[] all=new byte[0];
+                    for(String k:new String[]{"csd-0","csd-1"}) {
+                        ByteBuffer b=fmt.getByteBuffer(k);
+                        if(b!=null) { b=b.duplicate(); byte[] part=new byte[b.remaining()]; b.get(part); all=ICLinkProtocol.concat(all,ICLinkProtocol.annexB(part)); }
+                    }
+                    if(all.length>0)config=ICLinkProtocol.config(all);
                 }
-            } catch (Throwable ignored) {
-            }
-        }
-        if (p != null) {
-            try {
-                p.join(1500);
-            } catch (InterruptedException ignored) {
-            }
-        }
-        if (s != null) {
-            try {
-                s.join(1500);
-            } catch (InterruptedException ignored) {
-            }
-        }
-        releaseInternal();
-        Log.i(TAG, "ICLinkProjector stopped");
-    }
-
-    /** 编码输出循环：dequeue 编码帧，SPS/PPS 缓存并在关键帧前补发，帧数据入队（防背压）。 */
-    private void pushLoop() {
-        MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-        byte[] config = null;
-        while (running.get()) {
-            try {
-                int idx = codec.dequeueOutputBuffer(info, DEQUEUE_TIMEOUT_US);
-                if (idx < 0) {
+                if(index<0)continue;
+                byte[] data; int flags=info.flags; long pts=info.presentationTimeUs;
+                try {
+                    ByteBuffer b=s.codec.getOutputBuffer(index);
+                    if(b==null || info.size<=0)continue;
+                    if(info.size>ICLinkProtocol.MAX_AU)throw new IOException("oversize codec AU");
+                    b.position(info.offset); b.limit(info.offset+info.size);
+                    data=new byte[info.size]; b.get(data);
+                } finally { s.codec.releaseOutputBuffer(index,false); }
+                // Keep draining the encoder after TCP failure: an undrained Surface
+                // can backpressure the shared Camera2 session and freeze local preview.
+                if(s.networkFailed)continue;
+                data=ICLinkProtocol.annexB(data);
+                byte[] found=ICLinkProtocol.config(data);
+                if(found.length>0)config=ICLinkProtocol.mergeConfig(config,found);
+                if(!checked&&config.length>0) {
+                    int[] pl=spsProfileLevel(config);
+                    if(pl!=null) {
+                        checked=true;
+                        Log.i(TAG,"encoder SPS profile="+pl[0]+" level="+pl[1]+" head="+headHex(config));
+                        if(pl[0]!=66)throw new IOException("encoder profile "+pl[0]+" is not Baseline 66");
+                        if(pl[1]>31)throw new IOException("encoder level "+pl[1]+" exceeds verified 3.1");
+                    }
+                }
+                boolean idr=ICLinkProtocol.hasNal(data,5), vcl=idr||ICLinkProtocol.hasNal(data,1);
+                if(!vcl) {
+                    if(!ICLinkProtocol.isControlOnly(data))throw new IOException("unsupported non-control NAL; refusing silent video drop");
                     continue;
                 }
-                boolean isConfig = (info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0;
-                boolean isKey = (info.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0;
-                byte[] data = new byte[info.size];
-                codec.getOutputBuffer(idx).get(data, 0, info.size);
-                codec.releaseOutputBuffer(idx, false);
-                if (isConfig) {
-                    // SPS/PPS：缓存，待下一个关键帧前补发（解码器必须先收到 SPS/PPS 才能解 IDR）
-                    config = data;
-                    continue;
+                if(s.needIdr&&!idr)continue;
+                if(idr) {
+                    if(!ICLinkProtocol.hasNal(data,7)||!ICLinkProtocol.hasNal(data,8))data=ICLinkProtocol.concat(config,data);
+                    if(!ICLinkProtocol.hasNal(data,7)||!ICLinkProtocol.hasNal(data,8))continue;
+                    s.needIdr=false;
                 }
-                if (isKey && config != null) {
-                    enqueue(config);
+                if(!s.queue.offer(new Frame(data,pts))) {
+                    s.queue.clear(); s.needIdr=true; requestIdr(s);
                 }
-                enqueue(data);
-                if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                    break;
-                }
-            } catch (Throwable t) {
-                Log.w(TAG, "push loop error, silent: " + t.getMessage());
-                break;
             }
+        } catch(Throwable e) {
+            fail(s,e);
+            Runnable listener=failureListener;
+            if(listener!=null&&session==s)listener.run();
         }
     }
-
-    /** 入队：队列满则丢最旧帧保最新（防背压，发送慢时不阻塞编码线程）。 */
-    private void enqueue(byte[] data) {
-        if (!frameQueue.offer(data)) {
-            frameQueue.poll();
-            frameQueue.offer(data);
-        }
+    private static void sendLoop(Session s,String host,int port,int[] crop,String token) {
+        try {
+            s.socket.setTcpNoDelay(true); s.socket.setSendBufferSize(64*1024); s.socket.connect(new InetSocketAddress(host,port),2000);
+            s.socket.setSoTimeout(2000);
+            s.writeStartedNs=System.nanoTime();
+            ICLinkProtocol.hello(s.socket.getOutputStream(),s.side,crop,token);
+            s.writeStartedNs=0;
+            if(s.socket.getInputStream().read()!=1)throw new IOException("receiver rejected session");
+            s.connectedNs=System.nanoTime();
+            s.queue.clear(); s.needIdr=true; requestIdr(s);
+            boolean first=true;
+            while(s.running) {
+                Frame f=s.queue.poll(200,TimeUnit.MILLISECONDS); if(f==null)continue;
+                if(System.nanoTime()-f.queuedNs>2_000_000_000L)throw new IOException("stale AU; end session");
+                if(first&&!ICLinkProtocol.hasNal(f.data,5))continue;
+                first=false; s.writeStartedNs=System.nanoTime();
+                ICLinkProtocol.video(s.socket.getOutputStream(),f.data,f.pts); s.writeStartedNs=0;
+            }
+        } catch(Throwable e) { networkFailure(s,e); }
+        finally { try{s.socket.close();}catch(IOException ignored){} }
     }
-
-    /** 发送循环：后台连接仪表，随后取帧封装 4 字节大端长度头 + Annex-B ES 写 socket。 */
-    private void sendLoop(String host, int port) {
+    private static void watchdog(Session s) {
         try {
-            socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
-            socket.setTcpNoDelay(true);
-            out = socket.getOutputStream();
-            Log.i(TAG, "ICLinkProjector connected: " + host + ":" + port);
-        } catch (Throwable t) {
-            // 连接失败：静默降级（编码器继续工作，帧被丢弃），不影响浮窗
-            Log.w(TAG, "connect failed, projection drops: " + t.getMessage());
-            return;
-        }
-        byte[] head = new byte[4];
-        while (running.get()) {
-            try {
-                byte[] frame = frameQueue.poll(SEND_POLL_MS, TimeUnit.MILLISECONDS);
-                if (frame == null) {
-                    continue;
-                }
-                int len = frame.length;
-                head[0] = (byte) ((len >>> 24) & 0xFF);
-                head[1] = (byte) ((len >>> 16) & 0xFF);
-                head[2] = (byte) ((len >>> 8) & 0xFF);
-                head[3] = (byte) (len & 0xFF);
-                out.write(head);
-                out.write(frame);
-                out.flush();
-            } catch (Throwable t) {
-                // 推流中 IO 异常：静默降级
-                Log.w(TAG, "send loop error, silent: " + t.getMessage());
-                break;
+            while(s.running) {
+                long now=System.nanoTime();
+                long t=s.writeStartedNs;
+                /* VPU setup on the instrument can stop reading for seconds; keep the
+                 * first write lease generous instead of aborting a healthy session. */
+                if(t!=0&&now-s.connectedNs>8_000_000_000L&&now-t>750_000_000L) { networkFailure(s,new IOException("TCP write timeout")); break; }
+                Thread.sleep(100);
             }
-        }
+        } catch(InterruptedException ignored) { Thread.currentThread().interrupt(); }
     }
-
-    /** 释放编码器 / input Surface / socket（幂等）。 */
-    private void releaseInternal() {
-        try {
-            if (codec != null) {
-                codec.stop();
-            }
-        } catch (Throwable ignored) {
+    private static void networkFailure(Session s,Throwable e) {
+        s.networkFailed=true; s.writeStartedNs=0; s.queue.clear();
+        try{s.socket.close();}catch(IOException ignored){}
+        Log.w(TAG,"Instrument network ended; encoder remains draining until camera closes: "+e.getMessage());
+    }
+    private static void fail(Session s,Throwable e) {
+        s.running=false; try{s.socket.close();}catch(IOException ignored){}
+        Log.w(TAG,"Instrument encoder stopped; caller must detach its camera target: "+e.getMessage());
+    }
+    /** Detach logically now, release ONLY after the referencing CameraDevice onClosed.
+     * Keep dequeueing while the old Camera2 target is retiring. */
+    public synchronized Runnable retire() {
+        Session s=session; session=null; if(s==null)return null;
+        networkFailure(s,new IOException("camera target retiring"));
+        return () -> dispose(s);
+    }
+    private static void dispose(Session s) {
+        s.running=false; try{s.socket.close();}catch(IOException ignored){}
+        for(Thread t:new Thread[]{s.push,s.send,s.watchdog})if(t!=null&&t!=Thread.currentThread()) {
+            t.interrupt(); try{t.join(1000);}catch(InterruptedException e){Thread.currentThread().interrupt();}
         }
-        try {
-            if (codec != null) {
-                codec.release();
-            }
-        } catch (Throwable ignored) {
+        if(s.push!=null&&s.push.isAlive()) {
+            Log.e(TAG,"Codec thread did not exit; retaining codec instead of concurrent release"); return;
         }
-        codec = null;
-        try {
-            if (inputSurface != null) {
-                inputSurface.release();
-            }
-        } catch (Throwable ignored) {
-        }
-        inputSurface = null;
-        try {
-            if (socket != null) {
-                socket.close();
-            }
-        } catch (Throwable ignored) {
-        }
-        socket = null;
-        out = null;
-        frameQueue.clear();
+        release(s);
+    }
+    private static void release(Session s) {
+        if(s.codec!=null) {try{s.codec.stop();}catch(Throwable ignored){} try{s.codec.release();}catch(Throwable ignored){} }
+        if(s.surface!=null)try{s.surface.release();}catch(Throwable ignored){}
+        s.queue.clear();
     }
 }

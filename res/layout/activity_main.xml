@@ -54,6 +54,14 @@
             android:textSize="16sp"
             android:layout_marginBottom="4dp"/>
 
+        <Button
+            android:id="@+id/btn_instrument"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:background="@drawable/bg_button"
+            android:textColor="@color/text_white"
+            android:text="仪表硬解投屏（实验设置，默认关闭）"/>
+
         <!-- v1.56 beta2：浮窗总开关独立置顶（原打灯联动开关），金色激活样式保留 -->
         <Button
             android:id="@+id/sw_enable"

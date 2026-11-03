@@ -19,7 +19,8 @@
 - **一键还原**：恢复左右浮窗默认位置/大小/画面缩放，绑定视角归位。
 - **BSD 预警补盲**：监测后车预警信号（BSD），预警触发自动弹出对应侧侧后方影像，预警结束自动收起（SideWarning）。
 - **信号门控**：信号解析与影像触发经 SignalGate 统一门控，避免重复触发与抖动误触发。
-- **仪表推流（实验）**：ICLinkProjector 以 MediaCodec H.264 硬编，将摄像头画面经 TCP 推流给仪表侧（默认 172.20.1.40:9000），分帧为 4 字节大端长度头 + H.264 Annex-B 裸流，SPS/PPS 在关键帧前补发。
+- **仪表原生硬解投屏（新增实验集成，默认关闭）**：车机 MediaCodec 编码 → 带令牌、方向/裁切的 TCP → 仪表 `libvpu.so.4` 原生解码 → CPU RGB565 转换 → 560×315 FG 小窗。左 `(80,224)`、右 `(1280,224)`，单侧互斥。主界面新增实验设置。使用新协议 `P7IC0001`，**不兼容旧长度头协议**。
+- **状态边界（test 分支，2026-11-04）**：已在驻车实车完成临时部署、安装与端到端显示验证（编码 → TCP → 仪表 VPU → 560×315 FG），并修复里程文字透出（FG 全局 alpha）。但实时解码实测约 12fps，**30fps 未达成**；接收器已停止、仪表已恢复。BSP 关闭 FG 可能瞬间移至 `(0,0)`，**仅限实验，不可作为行车可用功能**。详细见 [仪表集成说明](instrument/README.md)。
 
 ## 代码结构
 
@@ -52,7 +53,8 @@ cameraassist/
 3. **幂等下发**：Service 侧加同方向幂等锁，打灯期间同方向重复亮起且浮窗相机就绪则忽略，绝不重发 `sendAvmMode`；灯熄灭清锁，下次打灯重新下发。
 4. **渲染解耦**：窗口形状拖拽与画面渲染分离，画面恒 16:9 不随窗口拉伸。
 5. **权限自动化**：ADB 连接建立后自动授予相机与悬浮窗权限（失败不阻塞开关流程）。
-6. **推流封装**：`ICLinkProjector` 复用浮窗相机 Surface 输入，`COLOR_FormatSurface` + 1280x720 / 2Mbps / 15fps / I 帧间隔 1；帧格式 4 字节大端长度头 + H.264 Annex-B ES 裸流，SPS/PPS 缓存并在关键帧前补发。
+6. **推流封装**：`ICLinkProjector` 使用同一 Camera2 的独立 encoder Surface，320×240 / 0.8Mbps / 30fps / Baseline 无 B 帧 / 关键帧间隔 1s（test 分支当前实验值）；不是 TextureView 缩放后画面。新协议先认证方向/裁切，再传完整 Annex-B AU；首次必须 SPS/PPS + IDR。拥堵清 GOP 等 IDR，TCP 写入有超时；断网仍排空编码输出以减轻本地预览反压。
+7. **生命周期**：切换侧别使用新连接；旧编码 Surface 等所属 CameraDevice `onClosed` 后释放。相机打开与会话配置带 generation 检查，编码/流组合故障尝试一次 local-only 相机会话回退。实际 HAL 行为仍须驻车验收。
 
 ## 构建
 
@@ -62,7 +64,7 @@ cameraassist/
 aapt2 compile → aapt2 link → javac（android.jar）→ d8（desugar）→ zipalign → apksigner
 ```
 
-需 JDK + Android SDK build-tools；签名使用本地 keystore，仓库不含签名文件。构建脚本示例见各版本 `build_vNN.py`（离线链脚本）。
+需 JDK + Android SDK build-tools；签名使用本地 keystore，仓库不含签名文件。新增本地离线构建脚本 [instrument/build_local.py](instrument/build_local.py)，可运行协议/门禁/像素测试、构建 ARMEL 接收器，并选择生成 **未签名 APK**；参数、外部 SDK/原车库来源和剩余验收见 [仪表集成说明](instrument/README.md)。脚本不执行 ADB、部署或设备命令。
 
 ## 开源声明
 

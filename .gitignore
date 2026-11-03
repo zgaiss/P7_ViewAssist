@@ -1,0 +1,13 @@
+# Local-only generated artifacts and external/proprietary dependencies
+/instrument/build/
+/instrument/vendor/
+**/__pycache__/
+*.pyc
+*.dSYM/
+# Never commit deployment secrets/signing keys
+*.keystore
+*.jks
+*.p12
+instrument-token*
+# Accidental nested working directory (logs/private artifacts)
+/车机项目/

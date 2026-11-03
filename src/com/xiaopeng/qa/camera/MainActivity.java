@@ -139,6 +139,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
         btnClearLog.setOnClickListener(this);
         tvRepoLink.setOnClickListener(this);
         btnAbout.setOnClickListener(this);
+        findViewById(R.id.btn_instrument).setOnClickListener(v -> showInstrumentSettings());
 
         etHost.setText(prefs.getString("host", "127.0.0.1"));
         etPort.setText(String.valueOf(prefs.getInt("port", 5050)));
@@ -152,6 +153,62 @@ public class MainActivity extends Activity implements View.OnClickListener {
 
         // v1.57 beta2：启动即校验 APK 签名指纹，非官方签名仅警告不阻断
         checkSignature();
+    }
+
+    private void showInstrumentSettings() {
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(28, 12, 28, 12);
+        TextView warning = new TextView(this);
+        warning.setText("仅驻车实验：需手动启动仪表接收器。左右窗560×315，左(80,224)/右(1280,224)。"
+                + "关闭前景层可能瞬间移至左上角；实时硬解/恢复尚需实车验收。"
+                + "仪表里程/警示文字属于更高层，会保持压在小窗之上（安全保留）。"
+                + "发送原始1280×720相机流；默认按当前浮窗缩放/平移自动裁切，关闭跟随后使用手填裁切。保存后下次弹窗生效；关闭会立即停投屏。");
+        box.addView(warning);
+        android.widget.CheckBox enable = new android.widget.CheckBox(this);
+        enable.setText("确认风险，启用实验仪表投屏");
+        enable.setChecked(prefs.getBoolean("icl_projection_enable", false)); box.addView(enable);
+        android.widget.CheckBox follow = new android.widget.CheckBox(this);
+        follow.setText("跟随浮窗当前画面（自动裁切，推荐）");
+        follow.setChecked(prefs.getBoolean("icl_follow_overlay", true)); box.addView(follow);
+        String[] keys={"icl_ip","icl_port","icl_token","icl_left_crop","icl_right_crop"};
+        String[] labels={"仪表IPv4", "端口", "共享令牌（64位hex，不是加密）", "左裁切 x,y,w,h", "右裁切 x,y,w,h"};
+        String[] defaults={ICLinkProjector.DEFAULT_HOST,"9000","","0,0,1280,720","0,0,1280,720"};
+        EditText[] fields=new EditText[keys.length];
+        for(int i=0;i<keys.length;i++) {
+            TextView label=new TextView(this);label.setText(labels[i]);box.addView(label);
+            fields[i]=new EditText(this); fields[i].setSingleLine(true);
+            fields[i].setText(i==1?String.valueOf(prefs.getInt(keys[i],9000)):prefs.getString(keys[i],defaults[i]));
+            box.addView(fields[i]);
+        }
+        fields[2].setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        ScrollView scroll=new ScrollView(this);scroll.addView(box);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("仪表原生硬解（实验）")
+                .setView(scroll).setNegativeButton("取消",null).setPositiveButton("保存",null).create();
+        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            try {
+                int port=Integer.parseInt(fields[1].getText().toString().trim());
+                if(port<1024||port>65535)throw new IllegalArgumentException("端口范围1024..65535");
+                String host=fields[0].getText().toString().trim();
+                if(!host.matches("[0-9.]+"))throw new IllegalArgumentException("请填写IPv4地址");
+                String token=fields[2].getText().toString().trim();
+                if(enable.isChecked())ICLinkProtocol.token(token);
+                for(int i=3;i<5;i++) {
+                    String[] parts=fields[i].getText().toString().split(",");
+                    if(parts.length!=4)throw new IllegalArgumentException("裁切格式x,y,w,h");
+                    int[] c=new int[4];for(int j=0;j<4;j++)c[j]=Integer.parseInt(parts[j].trim());
+                    ICLinkProtocol.validateCrop(c);
+                }
+                SharedPreferences.Editor e=prefs.edit();
+                e.putBoolean("icl_projection_enable",enable.isChecked()).putInt("icl_port",port);
+                e.putBoolean("icl_follow_overlay",follow.isChecked());
+                for(int i:new int[]{0,2,3,4})e.putString(keys[i],fields[i].getText().toString().trim());
+                e.apply();
+                if(!enable.isChecked())startService(new Intent(this,CameraOverlayService.class)
+                        .setAction(CameraOverlayService.ACTION_STOP_INSTRUMENT));
+                Toast.makeText(this,"已保存；新连接在下一次弹窗时使用",Toast.LENGTH_LONG).show(); dialog.dismiss();
+            } catch(Exception ex) { Toast.makeText(this,ex.getMessage(),Toast.LENGTH_LONG).show(); }
+        }));
+        dialog.show();
     }
 
     @Override

@@ -76,6 +76,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
     // v1.52：应用配置（BSD 提醒开关/焦点抑制开关/原厂相机包名），主界面开关改动后推送
     private static final String ACTION_APPLY_CONFIG = "com.xiaopeng.qa.camera.APPLY_CONFIG";
     // v1.54：BSD 常显窄条位置一键复位
+    public static final String ACTION_STOP_INSTRUMENT = "com.xiaopeng.qa.camera.STOP_INSTRUMENT";
     private static final String ACTION_RESET_BSD_POS = "com.xiaopeng.qa.camera.RESET_BSD_POS";
     // v1.54 beta4：BSD 预警浮窗自定义编辑 / 预警浮窗同步转向灯浮窗 / 单独关闭某侧预警浮窗
     private static final String ACTION_EDIT_BSD_WARNING = "com.xiaopeng.qa.camera.EDIT_BSD_WARNING";
@@ -125,7 +126,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
 
     // ---- v1.57 beta3：仪表 H.264 投影（ICLinkProjector）----
     private final ICLinkProjector icProjector = new ICLinkProjector();
-    private boolean iclProjectionEnabled = true;
+    private boolean iclProjectionEnabled = false;
     private String iclIp = ICLinkProjector.DEFAULT_HOST;
     private int iclPort = ICLinkProjector.DEFAULT_PORT;
 
@@ -448,7 +449,10 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         }
         String action = intent.getAction();
         if (action == null) action = "";
-        if (ACTION_START_LINK.equals(action)) {
+        if (ACTION_STOP_INSTRUMENT.equals(action)) {
+            closeCameraOnly();
+            if (hasAnyPreviewTarget()) openCamera();
+        } else if (ACTION_START_LINK.equals(action)) {
             startForegroundCompat();
             String host = intent.getStringExtra(EXTRA_HOST);
             int port = intent.getIntExtra(EXTRA_PORT, 5050);
@@ -719,8 +723,8 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         bsdRedOverlay = prefs.getBoolean("bsd_red_overlay", true);
         rExitSuppressMs = prefs.getLong("r_exit_suppress_ms", 2000L);
         if (rExitSuppressMs < 0) rExitSuppressMs = 2000L;
-        // v1.57 beta3：仪表 H.264 投影开关/地址（主界面无 UI，仅保留 prefs 钩子供调试）
-        iclProjectionEnabled = prefs.getBoolean("icl_projection_enable", true);
+        // Experimental instrument settings are configured through the main activity dialog.
+        iclProjectionEnabled = prefs.getBoolean("icl_projection_enable", false);
         iclIp = prefs.getString("icl_ip", ICLinkProjector.DEFAULT_HOST);
         iclPort = prefs.getInt("icl_port", ICLinkProjector.DEFAULT_PORT);
     }
@@ -1401,9 +1405,8 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
                 return;
             }
         }
-        // v1.57 beta3：浮窗弹窗即异步启动仪表 H.264 投影（连接失败静默降级，浮窗不受影响）。
-        // 多次打灯循环：stop 后再次 show 可重新启动，不泄漏编码器/socket/线程。
-        startProjectionIfEnabled();
+        // Projection is started later in openCamera, after old device target retirement.
+        // Runtime HAL isolation and sustained operation still require parked testing.
         // v1.39：同方向持续亮起期间若浮窗与相机均已就绪，忽略重复触发，绝不重发 AVM 绑定视角。
         // 打灯后转向灯信号理论上只产生一次 0->1 边沿；若车机 dumpsys 输出抖动出现假边沿，
         // 再次进入本方法会重复 sendAvmMode 抢占 AVM 视角（表现为倒挡影像被覆盖、转向画面卡顿），
@@ -1413,6 +1416,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
             serviceLog("同方向信号持续亮起，忽略重复触发，不重发 AVM 视角");
             return;
         }
+        projectionSuppressed = false;
         // v1.57：打灯/手动接管浮窗时无条件清理 BSD 归属标记并移除预警红框——
         // 预警红框与预警浮窗完全绑定（随浮窗出现/消失），浮窗一旦被转向/手动接管
         // （不再限于同方向），立即移除预警红框；清理归属保证转向红框独立判定
@@ -1503,25 +1507,123 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
 
     // ---- v1.57 beta3：仪表 H.264 投影联动 ----
 
-    /** 启用仪表投影时异步启动（失败静默降级，绝不阻塞/影响浮窗）。 */
-    private void startProjectionIfEnabled() {
-        if (!iclProjectionEnabled) {
-            return;
+    /** Experimental projection lifecycle; HAL isolation still requires parked validation. */
+    private final java.util.concurrent.atomic.AtomicLong cameraGeneration = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.ConcurrentHashMap<CameraDevice,
+            java.util.concurrent.ConcurrentLinkedQueue<Runnable>> projectionClosures = new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile boolean projectionSuppressed;
+    private boolean reopenAfterCameraClosed;
+    private volatile boolean serviceDestroyed;
+    private void instrumentFallback() {
+        final long failedGeneration = cameraGeneration.get();
+        mainHandler.post(() -> {
+            if (projectionSuppressed || serviceDestroyed || failedGeneration != cameraGeneration.get()) return;
+            projectionSuppressed = true;
+            closeCameraOnly();
+            if (hasAnyPreviewTarget()) openCamera();
+        });
+    }
+    /**
+     * Reproduce the floating window's current TextureView transform as a source
+     * crop. The local window may zoom/pan a 1280x720 buffer; the instrument would
+     * otherwise show the raw 2x2 fisheye. Manual icl_*_crop values remain the
+     * fallback when follow mode is off or the window is unavailable.
+     */
+    private int[] projectionCrop(int side) {
+        int[] full = {0, 0, BUFFER_W, BUFFER_H};
+        SharedPreferences p = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        if (!p.getBoolean("icl_follow_overlay", true)) {
+            String key = side == 1 ? "icl_left_crop" : "icl_right_crop";
+            try {
+                String[] f = p.getString(key, "0,0,1280,720").split(",");
+                if (f.length != 4) return full;
+                int[] c = new int[4];
+                for (int i = 0; i < 4; i++) c[i] = Integer.parseInt(f[i].trim());
+                ICLinkProtocol.validateCrop(c);
+                return encoderCrop(c[0], c[1], c[2], c[3]);
+            } catch (Throwable ignored) { return full; }
         }
+        View v = overlayView;
+        if (v == null) return full;
+        WindowManager.LayoutParams lp = (WindowManager.LayoutParams) v.getLayoutParams();
+        int vw = lp.width, vh = lp.height;
+        if (vw <= 0 || vh <= 0) { vw = v.getWidth(); vh = v.getHeight(); }
+        if (vw <= 0 || vh <= 0) return full;
+        DisplayMetrics dm = new DisplayMetrics();
+        wm.getDefaultDisplay().getRealMetrics(dm);
+        String prefix = side == 1 ? "left_" : "right_";
+        float cs = p.getFloat(prefix + "cam_scale", CAM_SCALE_DEFAULT);
+        if (cs < CAM_SCALE_MIN) cs = CAM_SCALE_MIN;
+        if (cs > CAM_SCALE_MAX) cs = CAM_SCALE_MAX;
+        float defW = dm.widthPixels * OVERLAY_DEF_W_RATIO, defH = defW * 9f / 16f;
+        float Wv = defW * cs, Hv = defH * cs;
+        float scale, dx, dy;
+        boolean defaultCrop = !p.contains(prefix + "cam_scale") && !editMode;
+        if (defaultCrop) {
+            float fit = Math.min(vw / Wv, vh / Hv);
+            scale = (Wv / BUFFER_W) * fit;
+            dx = (vw - Wv * fit) / 2f; dy = (vh - Hv * fit) / 2f;
+        } else {
+            scale = Wv / BUFFER_W;
+            dx = (vw - Wv) / 2f + p.getFloat(prefix + "pan_x", 0f);
+            dy = (vh - Hv) / 2f + p.getFloat(prefix + "pan_y", 0f);
+        }
+        if (!(scale > 0f)) return full;
+        float x0 = -dx / scale, y0 = -dy / scale;
+        float x1 = (vw - dx) / scale, y1 = (vh - dy) / scale;
+        int cx = (int) Math.floor(Math.max(0f, x0));
+        int cy = (int) Math.floor(Math.max(0f, y0));
+        int cw = (int) Math.ceil(Math.min(BUFFER_W, x1)) - cx;
+        int ch = (int) Math.ceil(Math.min(BUFFER_H, y1)) - cy;
+        cx = Math.max(0, Math.min(BUFFER_W - 2, cx)) & ~1;
+        cy = Math.max(0, Math.min(BUFFER_H - 2, cy)) & ~1;
+        cw = Math.max(2, Math.min(BUFFER_W - cx, cw)) & ~1;
+        ch = Math.max(2, Math.min(BUFFER_H - cy, ch)) & ~1;
+        if (cw < 2 || ch < 2) return full;
+        return encoderCrop(cx, cy, cw, ch);
+    }
+
+    /** Map a 1280x720 view crop into the centred 16:9 area of the 320x240 encoder. */
+    private static int[] encoderCrop(int x, int y, int w, int h) {
+        int ex = (x / 4) & ~1, ey = 30 + ((y / 4) & ~1);
+        int ew = (w / 4) & ~1, eh = (h / 4) & ~1;
+        ex = Math.max(0, Math.min(320 - 2, ex));
+        ey = Math.max(30, Math.min(210 - 2, ey));
+        ew = Math.max(2, Math.min(320 - ex, ew)) & ~1;
+        eh = Math.max(2, Math.min(210 - ey, eh)) & ~1;
+        return new int[]{ex, ey, ew, eh};
+    }
+
+    private void startProjectionIfEnabled(String dir) {
+        SharedPreferences p = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        iclProjectionEnabled = p.getBoolean("icl_projection_enable", false);
+        int side = "LEFT".equals(dir) ? 1 : "RIGHT".equals(dir) ? 2 : 0;
+        if (!iclProjectionEnabled || projectionSuppressed || side == 0) { stopProjection(); return; }
         try {
-            if (icProjector.isRunning()) {
-                return;
-            }
-            icProjector.start(iclIp, iclPort);
+            if (icProjector.isForSide(side)) return;
+            int[] crop = projectionCrop(side);
+            Log.i(TAG, "projection crop=" + crop[0] + "," + crop[1] + "," + crop[2] + "," + crop[3]
+                    + " follow=" + p.getBoolean("icl_follow_overlay", true) + " side=" + side);
+            stopProjection();
+            icProjector.setFailureListener(this::instrumentFallback);
+            icProjector.start(p.getString("icl_ip", ICLinkProjector.DEFAULT_HOST),
+                    p.getInt("icl_port", ICLinkProjector.DEFAULT_PORT), side, crop,
+                    p.getString("icl_token", ""));
         } catch (Throwable t) {
-            Log.w(TAG, "startProjection failed, silent: " + t.getMessage());
+            stopProjection();
+            Log.w(TAG, "startProjection failed; continuing without a new encoder target: " + t.getMessage());
         }
     }
 
     /** 同步停止仪表投影（幂等，可重复调用）。 */
     private void stopProjection() {
         try {
-            icProjector.stop();
+            Runnable cleanup = icProjector.retire();
+            if (cleanup == null) return;
+            CameraDevice owner = cameraDevice;
+            if (owner == null) cleanup.run();
+            else projectionClosures.computeIfAbsent(owner,
+                    d -> new java.util.concurrent.ConcurrentLinkedQueue<>()).add(cleanup);
         } catch (Throwable t) {
             Log.w(TAG, "stopProjection failed, silent: " + t.getMessage());
         }
@@ -2637,6 +2739,10 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
     };
 
     private void openCamera() {
+        if (serviceDestroyed) return;
+        if (!projectionClosures.isEmpty()) { reopenAfterCameraClosed = true; return; }
+        reopenAfterCameraClosed = false;
+        if (overlayView != null) startProjectionIfEnabled(direction);
         if (checkSelfPermission(Manifest.permission.CAMERA)
                 != PackageManager.PERMISSION_GRANTED) {
             Log.e(TAG, "no CAMERA permission");
@@ -2650,7 +2756,28 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
             }
             cameraId = pickCameraId(ids);
             openedDirection = direction;
-            cameraManager.openCamera(cameraId, deviceCallback, bgHandler);
+            final long generation = cameraGeneration.incrementAndGet();
+            cameraManager.openCamera(cameraId, new CameraDevice.StateCallback() {
+                @Override public void onOpened(CameraDevice device) {
+                    mainHandler.post(() -> {
+                        if (serviceDestroyed || generation != cameraGeneration.get() || !hasAnyPreviewTarget()) { device.close(); return; }
+                        deviceCallback.onOpened(device);
+                    });
+                }
+                @Override public void onDisconnected(CameraDevice device) {
+                    mainHandler.post(() -> {
+                        if (cameraDevice == device) { stopProjection(); cameraDevice = null; }
+                        device.close();
+                    });
+                }
+                @Override public void onError(CameraDevice device, int error) {
+                    mainHandler.post(() -> {
+                        if (cameraDevice == device) { stopProjection(); cameraDevice = null; }
+                        device.close();
+                    });
+                }
+                @Override public void onClosed(CameraDevice device) { deviceCallback.onClosed(device); }
+            }, bgHandler);
         } catch (CameraAccessException | SecurityException e) {
             Log.e(TAG, "openCamera failed", e);
             // v1.52：Camera2 打开失败时尝试 Camera1 回退钩子（默认关闭，偏好 camera1_fallback 开启）
@@ -2838,6 +2965,8 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
 
     /** 仅关闭摄像头通道（保留 TextureView/SurfaceTexture），用于方向切换后按新方向重开。 */
     private void closeCameraOnly() {
+        cameraGeneration.incrementAndGet();
+        stopProjection(); // Retire codec, but keep draining until this device's onClosed.
         // v1.52：Camera1 回退实例一并释放（幂等）
         if (camera1Preview != null) {
             camera1Preview.close();
@@ -2870,6 +2999,14 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
     }
 
     private final CameraDevice.StateCallback deviceCallback = new CameraDevice.StateCallback() {
+        @Override public void onClosed(CameraDevice device) {
+            java.util.concurrent.ConcurrentLinkedQueue<Runnable> cleanup = projectionClosures.remove(device);
+            if (cleanup != null) for (Runnable r : cleanup) r.run();
+            if (serviceDestroyed && projectionClosures.isEmpty() && bgThread != null) bgThread.quitSafely();
+            mainHandler.post(() -> {
+                if (reopenAfterCameraClosed && projectionClosures.isEmpty() && hasAnyPreviewTarget()) openCamera();
+            });
+        }
         @Override
         public void onOpened(CameraDevice device) {
             cameraDevice = device;
@@ -2903,6 +3040,9 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
 
     private void createPreviewSession() {
         if (cameraDevice == null) return;
+        final CameraDevice owner = cameraDevice;
+        final long generation = cameraGeneration.get();
+        final boolean instrumentTarget = icProjector.getInputSurface() != null;
         try {
             java.util.ArrayList<Surface> targets = new java.util.ArrayList<>();
             if (textureView != null && textureView.isAvailable()
@@ -2960,21 +3100,31 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
                     new CameraCaptureSession.StateCallback() {
                         @Override
                         public void onConfigured(CameraCaptureSession session) {
-                            captureSession = session;
-                            try {
-                                session.setRepeatingRequest(builder.build(), null, bgHandler);
-                            } catch (CameraAccessException e) {
-                                Log.e(TAG, "setRepeatingRequest failed", e);
-                            }
+                            mainHandler.post(() -> {
+                                if (owner != cameraDevice || generation != cameraGeneration.get()) { session.close(); return; }
+                                captureSession = session;
+                                try {
+                                    session.setRepeatingRequest(builder.build(), null, bgHandler);
+                                } catch (CameraAccessException | IllegalStateException e) {
+                                    Log.e(TAG, "setRepeatingRequest failed", e);
+                                    if (instrumentTarget) instrumentFallback();
+                                }
+                            });
                         }
 
                         @Override
                         public void onConfigureFailed(CameraCaptureSession session) {
-                            Log.e(TAG, "camera configure failed");
+                            session.close();
+                            mainHandler.post(() -> {
+                                Log.e(TAG, "camera configure failed");
+                                if (instrumentTarget && owner == cameraDevice && generation == cameraGeneration.get())
+                                    instrumentFallback(); // Exactly one local-only retry per visible session.
+                            });
                         }
                     }, bgHandler);
-        } catch (CameraAccessException e) {
+        } catch (CameraAccessException | IllegalArgumentException | IllegalStateException e) {
             Log.e(TAG, "createPreviewSession failed", e);
+            if (instrumentTarget) instrumentFallback();
         }
     }
 
@@ -2984,6 +3134,9 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
      * 幂等，可被 onDestroy 与 onSurfaceTextureDestroyed 重复调用。
      */
     private void releaseCamera() {
+        reopenAfterCameraClosed = false;
+        cameraGeneration.incrementAndGet();
+        stopProjection();
         // v1.52：Camera1 回退实例一并释放（幂等）
         if (camera1Preview != null) {
             camera1Preview.close();
@@ -3025,6 +3178,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
 
     @Override
     public void onDestroy() {
+        serviceDestroyed = true;
         if (monitor != null) {
             monitor.stop();
             monitor = null;
@@ -3049,7 +3203,8 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         }
         releaseCamera();
         removeOverlay();
-        if (bgThread != null) bgThread.quitSafely();
+        // Keep the callback looper alive until retired CameraDevice targets are closed.
+        if (bgThread != null && projectionClosures.isEmpty()) bgThread.quitSafely();
         serviceLog("前台服务已停止");
         super.onDestroy();
     }
