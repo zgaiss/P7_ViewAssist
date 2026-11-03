@@ -5,7 +5,7 @@ Based on test commit `83743850b22b66f4197f7ad70b5d8de79a789efb`. Experimental on
 ## Changes
 
 - Track successful reader-thread creation. Allocation or pthread_create failure cannot join an uninitialized pthread_t.
-- If joining a successfully created reader fails, exit the worker process before stack/queue/decoder teardown. Process exit closes its pipe endpoint; the independent guardian keeps its existing lease/cleanup behavior. This is not proof of physical restoration or immunity to stuck drivers/guardian failure.
+- If joining a successfully created reader fails, exit the worker process before stack/queue/decoder teardown, without a potentially blocking diagnostic write. Process exit closes its pipe endpoint; the independent guardian keeps its existing lease/cleanup behavior. This is not proof of physical restoration or immunity to stuck drivers/guardian failure.
 - Read the queue drop counter under its existing mutex, matching the writer's synchronization. This counter still counts overflow episodes, not individual discarded AUs.
 - Align protocol definitions with existing array-form header declarations. No wire/protocol behavior changes; strict GCC no longer fails on this declaration mismatch.
 
@@ -27,4 +27,4 @@ Current IC_FEED timing mixes initialization, feeding, VPU work, synchronous CPU 
 
 The larger host latest-frame candidate reduced simulated backlog under injected slow display, but barely changed throughput (roughly 21.7 to 21.9fps with 45ms injected drawing). It also introduces mailbox threads, admission/storage and DMA policy changes. It is not integrated here as an unproven FPS fix.
 
-The next justified step is bounded, opt-in stage attribution with deterministic host delay tests, preserving release ordering, deadlines, default ABI gate and existing display checks. Real FPS conclusions still require separately authorized target evidence.
+Bounded, opt-in stage attribution is now included; see PROFILING.md for deterministic host tests and limits. Release ordering, deadlines, default ABI gate and existing display checks remain unchanged. Real FPS conclusions still require separately authorized target evidence.

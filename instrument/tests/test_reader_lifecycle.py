@@ -44,7 +44,7 @@ def main():
     stdout,stderr=p.communicate(timeout=7);text=stderr.decode()
     assert 'runtime error:' not in text,(mode,text)
     if mode in ('malloc','create'):assert p.returncode==1 and 'JOIN attempted' not in text,(mode,p.returncode,text)
-    elif mode=='join':assert p.returncode==74 and 'FATAL reader join unconfirmed' in text and 'IC_SESSION' not in text,(mode,p.returncode,text)
+    elif mode=='join':assert p.returncode==74 and 'FAULT join' in text and 'IC_SESSION' not in text,(mode,p.returncode,text)
     else:assert p.returncode==0 and text.count('JOIN attempted')==1,(mode,p.returncode,text)
     print('PASS',mode,'exit',p.returncode)
    finally:

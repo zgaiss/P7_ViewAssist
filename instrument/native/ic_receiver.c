@@ -7,6 +7,7 @@
 #include "ic_decoder.h"
 #include "ic_display.h"
 #include "ic_pixels.h"
+#include "ic_profile.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -61,25 +62,43 @@ static int guardian(int fd,unsigned side,const char *prefix){
     stopping=0;if(setsid()<0)return 1;
     unsigned char *rgb=malloc(IC_RGB_BYTES);if(!rgb)return 1;
     ic_display *display=NULL;int result=0,n=0;long long rd_sum=0,ds_sum=0;
+    struct ic_profile_stat read_wait={0},display_call={0};
     /* Every read is one COMPLETE CPU-owned RGB frame. No VPU DMA reaches scanout. */
     while(!stopping){
         long long a=ic_now_ms();
-        if(ic_read_exact(fd,rgb,IC_RGB_BYTES,1000))break;
+        uint64_t pa=ic_profile_now();
+        int read_rc=ic_read_exact(fd,rgb,IC_RGB_BYTES,1000);
+        ic_profile_record(&read_wait,pa,ic_profile_now(),read_rc);
+        if(read_rc)break;
         long long b=ic_now_ms();
         if(!display){display=ic_display_open(side,prefix);if(!display){result=1;break;}}
         long long c=ic_now_ms();
-        if(ic_display_frame(display,rgb,IC_RGB_BYTES)){result=1;break;}
+        pa=ic_profile_now();
+        int display_rc=ic_display_frame(display,rgb,IC_RGB_BYTES);
+        ic_profile_record(&display_call,pa,ic_profile_now(),display_rc);
+        if(display_rc){result=1;break;}
         long long d=ic_now_ms();rd_sum+=b-a;ds_sum+=d-c;++n;
         if(n%30==0)fprintf(stderr,"IC_GUARD n=%d read_avg=%lld display_avg=%lld\n",n,rd_sum/n,ds_sum/n);
     }
     if(display&&ic_display_close(display))result=1;
-    free(rgb);close(fd);fprintf(stderr,"guardian restored result=%d (allocation/activate may differ; physical transient unverified)\n",result);return result;
+    free(rgb);close(fd);
+    ic_profile_report("guardian_read_wait",&read_wait);
+    ic_profile_report("guardian_display_call",&display_call);
+    fprintf(stderr,"guardian restored result=%d (allocation/activate may differ; physical transient unverified)\n",result);return result;
 }
-struct output {int fd;struct ic_session session;unsigned char *rgb;};
+struct output {int fd;struct ic_session session;unsigned char *rgb;
+    struct ic_profile_stat convert,pipe_write;};
 static int frame_callback(const struct ic_yuv_frame *frame,void *opaque){
     struct output *o=opaque;struct ic_session *s=&o->session;
-    if(stopping||ic_pixels_rgb565(frame,s->crop_x,s->crop_y,s->crop_w,s->crop_h,o->rgb,IC_RGB_BYTES))return -1;
-    return ic_write_exact(o->fd,o->rgb,IC_RGB_BYTES,350);
+    if(stopping)return -1;
+    uint64_t a=ic_profile_now();
+    int rc=ic_pixels_rgb565(frame,s->crop_x,s->crop_y,s->crop_w,s->crop_h,o->rgb,IC_RGB_BYTES);
+    ic_profile_record(&o->convert,a,ic_profile_now(),rc);
+    if(rc)return -1;
+    a=ic_profile_now();
+    rc=ic_write_exact(o->fd,o->rgb,IC_RGB_BYTES,350);
+    ic_profile_record(&o->pipe_write,a,ic_profile_now(),rc);
+    return rc;
 }
 /* Reap guardian before any subsequent session. Never SIGKILL a restoring guardian. */
 static int reap_guardian(pid_t pid){
@@ -92,17 +111,18 @@ static int reap_guardian(pid_t pid){
 }
 #define AQ_CAP 12
 struct au { unsigned char *p; size_t n; };
-struct auq { pthread_mutex_t m; pthread_cond_t c; struct au item[AQ_CAP]; int head,tail,count,done,need_idr,dropped; };
+struct auq { pthread_mutex_t m; pthread_cond_t c; struct au item[AQ_CAP]; int head,tail,count,done,need_idr,dropped; unsigned high_water; uint64_t dropped_aus; };
 static void auq_init(struct auq*q){memset(q,0,sizeof(*q));pthread_mutex_init(&q->m,NULL);pthread_cond_init(&q->c,NULL);}
 static int auq_dropped(struct auq*q){pthread_mutex_lock(&q->m);int n=q->dropped;pthread_mutex_unlock(&q->m);return n;}
 static void auq_clear(struct auq*q){while(q->count){free(q->item[q->head].p);q->head=(q->head+1)%AQ_CAP;q->count--;}}
 static void auq_push(struct auq*q,unsigned char*p,size_t n,int idr){
     pthread_mutex_lock(&q->m);
-    if(q->need_idr&&!idr){free(p);}
-    else if(q->count==AQ_CAP){auq_clear(q);q->need_idr=1;q->dropped++;
+    if(q->need_idr&&!idr){if(IC_PROFILE)q->dropped_aus=ic_profile_add(q->dropped_aus,1);free(p);}
+    else if(q->count==AQ_CAP){if(IC_PROFILE)q->dropped_aus=ic_profile_add(q->dropped_aus,(uint64_t)q->count+(idr?0u:1u));auq_clear(q);q->need_idr=1;q->dropped++;
         if(idr){q->item[q->tail].p=p;q->item[q->tail].n=n;q->tail=(q->tail+1)%AQ_CAP;q->count=1;q->need_idr=0;}
         else free(p);
     } else {q->item[q->tail].p=p;q->item[q->tail].n=n;q->tail=(q->tail+1)%AQ_CAP;q->count++;if(idr)q->need_idr=0;}
+    if(IC_PROFILE&&(unsigned)q->count>q->high_water)q->high_water=(unsigned)q->count;
     pthread_cond_signal(&q->c);pthread_mutex_unlock(&q->m);
 }
 static int auq_pop(struct auq*q,struct au*b,int wait_ms){
@@ -139,7 +159,7 @@ static int session(int client,int listener,const unsigned char key[32],uint64_t 
     if(nonblock(pipefd[0])||nonblock(pipefd[1])){close(pipefd[0]);close(pipefd[1]);return -1;}
     pid_t child=fork();if(child<0){close(pipefd[0]);close(pipefd[1]);return -1;}
     if(!child){close(pipefd[1]);close(client);close(listener);int r=guardian(pipefd[0],settings.side,prefix);_exit(r);}
-    close(pipefd[0]);struct output output={pipefd[1],settings,NULL};
+    close(pipefd[0]);struct output output={.fd=pipefd[1],.session=settings};
     output.rgb=malloc(IC_RGB_BYTES);int fatal=!output.rgb;
     struct auq q;auq_init(&q);
     struct reader_arg ra={client,end,&q};pthread_t reader;int reader_started=0;
@@ -163,13 +183,21 @@ static int session(int client,int listener,const unsigned char key[32],uint64_t 
     /* No teardown while the reader may still own stack/queue storage.
      * Process fail-stop closes the pipe; independent guardian retains its lease. */
     if(reader_started&&pthread_join(reader,NULL)){
-        fprintf(stderr,"FATAL reader join unconfirmed; exit before dependent teardown\n");_exit(74);
+        /* Do not log here: a blocked stderr must not delay fail-stop. */
+        _exit(74);
     }
     fprintf(stderr,"IC_SESSION batches=%d dropped=%d\n",batch_n,auq_dropped(&q));
     close(pipefd[1]);
     if(decoder&&ic_decoder_close(decoder))fatal=1;
     if(reap_guardian(child))fatal=1;
-    auq_clear(&q);free(output.rgb);return fatal?-1:0;
+    /* Reader has joined; no concurrent queue access remains. Diagnostics run
+     * only after decoder and guardian cleanup, never in the frame hot path.
+     * dropped_aus excludes ordinary final teardown of unconsumed queue entries. */
+    auq_clear(&q);free(output.rgb);
+    ic_profile_report("convert",&output.convert);
+    ic_profile_report("pipe_write",&output.pipe_write);
+    if(IC_PROFILE)fprintf(stderr,"IC_PROFILE queue_capacity=%d queue_high_water=%u dropped_aus=%"PRIu64" overflow_events=%d\n",AQ_CAP,q.high_water,q.dropped_aus,q.dropped);
+    return fatal?-1:0;
 }
 
 int main(int argc,char **argv){
