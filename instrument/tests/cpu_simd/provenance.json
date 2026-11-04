@@ -1,0 +1,39 @@
+{
+  "baseline_commit": "c2ebfa26572f23da1de41d965cf2109cb2f42d52",
+  "baseline_git_blob_sha1": "1cdd0d13a589c08a74097f6e6404c63e009a425a",
+  "baseline_sha256": "11d5731c5dd2a7d07d5389b26fa85aa46adc224b9d42415e42cfa996ba93cb21",
+  "baseline_manifest_entry": {
+    "path": "instrument/native/ic_pixels.c",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "1cdd0d13a589c08a74097f6e6404c63e009a425a",
+    "size": 2979,
+    "url": "https://api.github.com/repos/zgaiss/P7_ViewAssist/git/blobs/1cdd0d13a589c08a74097f6e6404c63e009a425a"
+  },
+  "test_exact_source_commit": "a1a9bb2c7a04fb1647d65cb70cfe05ea4f8e1754",
+  "source_files": {
+    "test_exact.c": {
+      "original_sha256": "9aa126e283e5915e322e57484334a6bb3602ea02c638cd302f32e51b8853d2a4",
+      "origin": "source/instrument/experiments/cpu-exact-simd/prototype/test_exact.c"
+    },
+    "guard_rows.c": {
+      "original_sha256": "dd0af794414334009e1d24276a8eeec04c6e54d372b157302de1c825aa47f0e1",
+      "origin": "guard_rows.c"
+    },
+    "direct_neon_probe.c": {
+      "original_sha256": "7e6cb741339dbb85691484d66a880367fa26cc0fc828cdebad602d0d49d11249",
+      "origin": "direct_neon_probe.c"
+    },
+    "dispatch_probe.c": {
+      "original_sha256": "a9217c3322a9c7e55bd56457adb658262e14bf15053de28b8de8ab6367a5335c",
+      "origin": "validation/arm/dispatch_probe.c"
+    }
+  },
+  "test_exact_original_git_blob_sha1": "102b85b7d033e6f975c1b0f7ed79bf4002c1f888",
+  "modifications": {
+    "test_exact.c": "Integrated relative SIMD header, ic_pixels_row_* symbols, clarified scalar completion text only.",
+    "guard_rows.c": "Integrated relative SIMD header and ic_pixels_row_* symbols only.",
+    "direct_neon_probe.c": "Integrated relative SIMD header and ic_pixels_row_* symbols only.",
+    "dispatch_probe.c": "Unchanged integration-authored CPU dispatch probe."
+  }
+}

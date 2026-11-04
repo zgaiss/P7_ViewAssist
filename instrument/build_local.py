@@ -5,10 +5,47 @@ External SDK/target libraries remain outside this repository (license/provenance
 Outputs use an exclusive new build directory; no existing results overwritten.
 """
 from pathlib import Path
-import argparse, hashlib, json, subprocess, sys, tempfile, zipfile
+import argparse, hashlib, json, re, subprocess, sys, tempfile, zipfile
 ROOT=Path(__file__).resolve().parents[1]
 HOME=Path.home()
 def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
+def target_build_plan(ndk_bin, resource, sysroot, header, live, native, out,
+                      native_abi_confirmed=False, experimental_cpu_simd=False):
+    """Pure command planning: default keeps the baseline single-step scalar build."""
+    crt=sysroot/'usr/lib/arm-linux-gnueabi'
+    binary=out/'p7-ic-receiver-armel'
+    sources=sorted(native.glob('*.c'))
+    common=[ndk_bin/'clang','--target=arm-linux-gnueabi','-march=armv7-a','-mfloat-abi=soft','-nostdinc','-isystem',resource+'/include','-isystem',sysroot/'usr/include/arm-linux-gnueabi','-isystem',sysroot/'usr/include','-isystem',header,'-I',native,'-O2','-g','-std=c11','-DIC_VPU_ABI_CONFIRMED='+str(int(native_abi_confirmed)),'-Wall','-Wextra','-Werror','-Wno-extra-semi','-fno-stack-protector','-fno-pie']
+    link=['-nostdlib','-fuse-ld=lld','-Wl,-no-pie','-Wl,-z,noexecstack','-Wl,--dynamic-linker=/lib/ld-linux.so.3','-Wl,--build-id=sha1','-Wl,--allow-shlib-undefined',crt/'crt1.o',crt/'crti.o']
+    libraries=['-Wl,--start-group',live/'usr/lib/libvpu.so.4',*[live/'lib'/x for x in ['libc-2.13.so','libpthread-2.13.so','libdl-2.13.so','librt-2.13.so','libgcc_s.so.1']],crt/'libc_nonshared.a','-Wl,--end-group',crt/'crtn.o','-o',binary]
+    objects=[]
+    if experimental_cpu_simd:
+        simd=native/'pixels_simd'
+        sources += [simd/'dispatch_gather.c',simd/'row_scalar.c',simd/'row_neon.c']
+        common += ['-DIC_PIXELS_EXPERIMENTAL_NEON=1','-fno-lto']
+        for source in sources:
+            flags=list(common)
+            if source == simd/'row_neon.c':
+                flags[flags.index('-mfloat-abi=soft')]='-mfloat-abi=softfp'
+                flags += ['-mfpu=neon']
+            obj=out/'objects'/source.relative_to(native).with_suffix('.o')
+            objects.append({'source':source,'object':obj,
+                            'flags':flags[1:], 'command':flags+['-c',source,'-o',obj]})
+        inputs=[entry['object'] for entry in objects]
+    else:
+        inputs=sources
+    return {'sources':sources,'objects':objects,'binary':binary,
+            'link_command':common+link+inputs+libraries}
+
+def check_armel_abi(report, allow_neon=False):
+    """Reject hard-float calling conventions; softfp NEON keeps ARMEL arguments."""
+    if not re.search(r'Machine:\s+ARM\b',report):
+        raise ValueError('Expected an ARM ELF object or binary')
+    if any(x in report for x in ['hard-float ABI','EF_ARM_ABI_FLOAT_HARD','VFP registers','AAPCS VFP']):
+        raise ValueError('Hard-float calling convention is not compatible with ARMEL')
+    if not allow_neon and ('Advanced_SIMD' in report or 'NEON' in report):
+        raise ValueError('NEON instructions are restricted to row_neon.o')
+
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--experiment',type=Path,default=ROOT.parent/'ic-vdec-probe-20261102')
@@ -17,6 +54,7 @@ def main():
     ap.add_argument('--android-tools',type=Path,default=HOME/'WorkBuddy/2026-10-10-17-55-18/tools/sdk')
     ap.add_argument('--android-jar',type=Path,default=HOME/'Library/Android/sdk/platforms/android-37.0/android.jar',help='Official Android platform stub jar (not Robolectric android-all)')
     ap.add_argument('--native-abi-confirmed',action='store_true',help='Enable hardware calls for reviewed 5.4.16 ABI; still requires runtime explicit acknowledgements')
+    ap.add_argument('--experimental-cpu-simd',action='store_true',help='Opt in to runtime-gated CPU NEON conversion; independent of the VPU hardware ABI gate')
     ap.add_argument('--android',action='store_true',help='Also compile resources/Java/dex and assemble UNSIGNED APK')
     a=ap.parse_args()
     base=ROOT/'instrument/build';base.mkdir(parents=True,exist_ok=True)
@@ -39,6 +77,7 @@ def main():
     run([out/'test_preflight'])
     run(['cc','-std=c11','-Wall','-Wextra','-Werror','-fsanitize=undefined','-I',native,native/'ic_pixels.c',native/'tests/test_pixels.c','-o',out/'test_pixels'])
     run([out/'test_pixels'])
+    run([sys.executable,tests/'test_cpu_simd_build.py'])
     guardian_output=run([sys.executable,tests/'test_receiver_offline.py'])
     guardian_report=Path(guardian_output.strip().split('guardian host tests PASS: ')[-1])/'report.json'
     exp=a.experiment.resolve();sysroot=exp/'vendor/armel-glibc-headers/sysroot';live=exp/'vendor/instrument-20261103';header=exp/'vendor/imx-vpu-sdk/native-evidence/source-5.4.16/vpu'
@@ -46,15 +85,28 @@ def main():
     for entry in manifest['files']:
         if sha(live/entry['path'])!=entry['sha256']:raise ValueError('External library integrity mismatch')
     resource=run([a.ndk_bin/'clang','-print-resource-dir']).strip()
-    crt=sysroot/'usr/lib/arm-linux-gnueabi';binary=out/'p7-ic-receiver-armel'
-    sources=sorted(native.glob('*.c'))
-    command=[a.ndk_bin/'clang','--target=arm-linux-gnueabi','-march=armv7-a','-mfloat-abi=soft','-nostdinc','-isystem',resource+'/include','-isystem',sysroot/'usr/include/arm-linux-gnueabi','-isystem',sysroot/'usr/include','-isystem',header,'-I',native,'-O2','-g','-std=c11','-DIC_VPU_ABI_CONFIRMED='+str(int(a.native_abi_confirmed)),'-Wall','-Wextra','-Werror','-Wno-extra-semi','-fno-stack-protector','-fno-pie','-nostdlib','-fuse-ld=lld','-Wl,-no-pie','-Wl,-z,noexecstack','-Wl,--dynamic-linker=/lib/ld-linux.so.3','-Wl,--build-id=sha1','-Wl,--allow-shlib-undefined',crt/'crt1.o',crt/'crti.o',*sources,'-Wl,--start-group',live/'usr/lib/libvpu.so.4',*[live/'lib'/x for x in ['libc-2.13.so','libpthread-2.13.so','libdl-2.13.so','librt-2.13.so','libgcc_s.so.1']],crt/'libc_nonshared.a','-Wl,--end-group',crt/'crtn.o','-o',binary]
-    run(command)
-    elf=run([a.ndk_bin/'llvm-readelf','-h','-l','-d','-V',binary]);(out/'receiver-elf.txt').write_text(elf)
+    plan=target_build_plan(a.ndk_bin,resource,sysroot,header,live,native,out,
+                           a.native_abi_confirmed,a.experimental_cpu_simd)
+    sources=plan['sources'];binary=plan['binary'];object_evidence=[]
+    for entry in plan['objects']:
+        obj=entry['object'];obj.parent.mkdir(parents=True,exist_ok=True)
+        run(entry['command'])
+        abi=run([a.ndk_bin/'llvm-readelf','-h','-A',obj])
+        check_armel_abi(abi,allow_neon=entry['source'].name=='row_neon.c')
+        abi_path=obj.with_suffix('.elf.txt');abi_path.write_text(abi)
+        object_evidence.append({'source':str(entry['source'].relative_to(ROOT)),
+                                'source_sha256':sha(entry['source']),
+                                'object':str(obj),'sha256':sha(obj),
+                                'flags':[str(x) for x in entry['flags']],
+                                'abi_report':str(abi_path)})
+    run(plan['link_command'])
+    elf=run([a.ndk_bin/'llvm-readelf','-h','-l','-d','-V','-A',binary]);(out/'receiver-elf.txt').write_text(elf)
+    check_armel_abi(elf,allow_neon=a.experimental_cpu_simd)
     assert 'Machine:                           ARM' in elf and '/lib/ld-linux.so.3' in elf and 'libvpu.so.4' in elf
     assert all(x not in elf.lower() for x in ['android','libavcodec','libavutil','/users/'])
-    result={'binary':str(binary),'bytes':binary.stat().st_size,'sha256':sha(binary),'abi_enabled':a.native_abi_confirmed,'hardware_run':False,'source_sha256':{str(p.relative_to(ROOT)):sha(p) for p in sources+sorted(native.glob('*.h'))},'external_header_sha256':sha(header/'vpu_lib.h'),'offline_tests':'Java protocol, cross-language handshake, C protocol IO/bounds, preflight, pixels, HOST-STUB guardian fault cases','guardian_host_report':str(guardian_report)}
-    tracked_inputs=sources+sorted(native.rglob('*.h'))+sorted(native.rglob('test*.c'))+sorted(tests.glob('*.*'))+sorted((ROOT/'src').rglob('*.java'))+sorted((ROOT/'res').rglob('*.xml'))+[ROOT/'AndroidManifest.xml',Path(__file__)]
+    result={'binary':str(binary),'bytes':binary.stat().st_size,'sha256':sha(binary),'abi_enabled':a.native_abi_confirmed,'hardware_run':False,'source_sha256':{str(p.relative_to(ROOT)):sha(p) for p in sources+sorted(native.glob('*.h'))},'external_header_sha256':sha(header/'vpu_lib.h'),'offline_tests':'Java protocol, cross-language handshake, C protocol IO/bounds, preflight, pixels, CPU SIMD build planning, HOST-STUB guardian fault cases','guardian_host_report':str(guardian_report)}
+    result['experimental_cpu_simd']={'enabled':a.experimental_cpu_simd,'gate':'IC_PIXELS_EXPERIMENTAL_NEON','default':False,'runtime_dispatch':'OS HWCAP NEON required' if a.experimental_cpu_simd else 'baseline scalar only','objects':object_evidence,'link_command':[str(x) for x in plan['link_command']]}
+    tracked_inputs=sorted(native.rglob('*.c'))+sorted(native.rglob('*.h'))+sorted(native.rglob('test*.c'))+sorted(tests.glob('*.*'))+sorted((ROOT/'src').rglob('*.java'))+sorted((ROOT/'res').rglob('*.xml'))+[ROOT/'AndroidManifest.xml',Path(__file__)]
     result['source_sha256']={str(p.relative_to(ROOT)):sha(p) for p in tracked_inputs}
     if a.android:
         tools=a.android_tools;jar=a.android_jar;aapt=tools/'bin/aapt2'

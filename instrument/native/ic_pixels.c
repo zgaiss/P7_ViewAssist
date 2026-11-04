@@ -4,6 +4,20 @@
 #include <stdint.h>
 #include <string.h>
 
+/* Experimental build opt-in; the default preprocesses to the scalar path. */
+#ifndef IC_PIXELS_EXPERIMENTAL_NEON
+#define IC_PIXELS_EXPERIMENTAL_NEON 0
+#endif
+#if IC_PIXELS_EXPERIMENTAL_NEON
+#include "pixels_simd/ic_pixels_simd.h"
+#if !defined(__linux__) || !defined(__arm__) || defined(__ARM_PCS_VFP)
+#error "Experimental NEON requires Linux ARM32 base AAPCS"
+#endif
+#if defined(__ARM_NEON)
+#error "Compile ic_pixels.c with baseline flags, not NEON"
+#endif
+#endif
+
 static int clip(int n) { return n < 0 ? 0 : n > 255 ? 255 : n; }
 static int floor256(int n) { return n >= 0 ? (n >> 8) : -(((-n) + 255) >> 8); }
 static int disjoint(const unsigned char *src, size_t n,
@@ -41,6 +55,11 @@ int ic_pixels_rgb565(const struct ic_yuv_frame *f,
     if (!h) h = 1;
     ox = (IC_PIXELS_WIDTH - w) / 2u;
     oy = (IC_PIXELS_HEIGHT - h) / 2u;
+#if IC_PIXELS_EXPERIMENTAL_NEON
+    /* Per-call OS probe: no mutable cache or asynchronous ownership changes.
+     * Unsupported/missing capability reporting uses the original scalar loop. */
+    int use_neon = ic_pixels_neon_available();
+#endif
     memset(dst, 0, len);
     /* ARM32 has no 64-bit divide: compute the column map once, never per pixel. */
     for (unsigned dx = 0; dx < w; ++dx)
@@ -48,6 +67,15 @@ int ic_pixels_rgb565(const struct ic_yuv_frame *f,
     for (unsigned dy = 0; dy < h; ++dy) {
         unsigned sy = cy + (unsigned)((uint32_t)dy * ch / h);
         unsigned char *row = dst + ((size_t)(dy + oy) * IC_PIXELS_WIDTH + ox) * 2u;
+#if IC_PIXELS_EXPERIMENTAL_NEON
+        if (use_neon) {
+            ic_pixels_gather_neon(f->y + (size_t)sy * f->y_stride,
+                                 f->u + (size_t)(sy / 2u) * f->c_stride,
+                                 f->v + (size_t)(sy / 2u) * f->c_stride,
+                                 sx_tab, row, w);
+            continue;
+        }
+#endif
         for (unsigned dx = 0; dx < w; ++dx) {
             unsigned sx = sx_tab[dx];
             size_t uv = (size_t)(sy / 2u) * f->c_stride + sx / 2u;
