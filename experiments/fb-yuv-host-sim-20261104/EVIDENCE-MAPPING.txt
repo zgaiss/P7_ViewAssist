@@ -1,0 +1,76 @@
+Evidence mapping and deliberately incomplete model boundaries
+2026-11-04
+
+Target source: prior offline framebuffer audit, 2026-11-04.
+Audit report SHA-256 is recorded in VALIDATION.json. Target dumps and device
+images are not included. The address references below identify prior evidence;
+no original application or target snapshot is opened by this simulation code.
+
+Observed target facts -> modeled behavior
+
+1. Pinned decoder aligns allocation stride/height and exposes short-lived CPU
+   planes; framebuffer default UV offsets use its own dimensions/stride.
+   -> layouts.py uses one padded source arena and independent tight/padded
+      destination planes. Source leases and CPU visibility are explicit inputs.
+   -> No address import or real cache property is inferred.
+
+2. Setup initializes private+0x90 completion (c034a650); pan waits that completion
+   before programming the next slot (c034c2c8) and returns after select/IRQ enable.
+   -> DriverModel starts with one unassociated credit, waits before submit, then
+      returns before the separate fake hardware latch event.
+   -> The model does not implement actual 50-tick timing or all driver branches.
+
+3. Software rotates slot index; target update-offset and select return values
+   are not checked at c034c3a4/c034c3b8. Offset code has a -13 path.
+   -> Fault injection can return zero while leaving an invalid offset or failing
+      to queue a new frame. Error codes are selected model inputs, not an
+      assertion that every injected path is reachable for every target mode.
+
+4. Target callbacks complete software notifications without a user frame token.
+   -> IRQ credit alone does not alter the policy's frame leases.
+   -> Model tokens add epoch, slot version and allocation generation. A matching
+      real API supplying that association has NOT been identified.
+
+5. The target last-read/bus-drain boundary is unproven.
+   -> Fake hardware deliberately may retain an old reader after current changes.
+      This is an adversarial assumption not ruled out by the current evidence,
+      not a measurement that the target always behaves this way.
+   -> last_read(), retirement witnesses and global_stop_oracle() are independent
+      trusted test oracles. They MUST NOT be replaced by timer/IRQ/return-code
+      guesses when interpreting these results.
+
+6. Target blank caches success without checking all lower results. Prior RGB
+   logs restored geometry/pixels but retained a grown allocation at a new base.
+   -> DriverModel.blank() cannot mint a DMA-stop witness. The growth negative
+      control keeps the new base/length on restoration and fails exact comparison.
+   -> The strict model rejects a predicted growth before mutation. A prediction
+      that a frame fits does not prove a real kernel never reallocates.
+
+7. Historical BG2/FG4 CSC table has a null coefficient pointer; uninit can skip
+   rewriting a previously changed matrix. Unblank can force activate bits.
+   -> A matrix signature and an optional activate-change branch are compared
+      independently from geometry, pixels, COM/GW and allocation identity.
+   -> These are symbolic signatures, not real register/coefficients emulation.
+
+New simulation assumptions, not target evidence
+
+- Exactly one fake display producer, at most one pending frame, no OEM actor.
+- Python bytearrays and a separate device-visible copy replace actual DMA/cache.
+- There is no IPU panel, line scanner, memory ordering model or hardware clock.
+- Process crashes are event injections. The harness itself remains alive and
+  retains fake device state. File-description and kernel process-DB lifetimes
+  are not modeled. Existing keeper-crash uncertainty therefore remains.
+- Journal fsync + rename is exercised without true process termination, storage
+  power loss, directory durability or autonomous production supervision.
+- The finite model covers one old and one new frame, Boolean events and selected
+  reuse rules. It does not prove the full implementation or kernel safe.
+- Actual shared DP/CSC writes, temporary FG position (0,0), OEM warnings and
+  physical visibility are absent. Their earlier safety gaps remain unchanged.
+- The byte copier rejects odd 4:2:0 geometry, including 560x315, as a conservative
+  model subset. This is not a new target-driver format-rejection result.
+
+Permitted conclusion
+
+The isolated policy can prevent premature reuse in the defined model when
+trusted last-read witnesses and all assumed contracts are supplied. Current
+target evidence does not supply those contracts. The default route stays off.

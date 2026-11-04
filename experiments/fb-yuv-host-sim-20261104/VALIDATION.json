@@ -1,0 +1,81 @@
+{
+  "base_commit": "c2ebfa26572f23da1de41d965cf2109cb2f42d52",
+  "prior_target_audit_report_sha256": "f37c40613c1f9cff29cabc5982341dbfefcea213b6f709f5c92da1cb696c110d",
+  "classification": "HOST ONLY; NO DEVICE EXECUTION OR APPLICATION INTEGRATION",
+  "case_summary": {
+    "classification": "HOST BYTE COPIES + DETERMINISTIC FAKE-DEVICE MODEL",
+    "cases": 34,
+    "passed": 34,
+    "failed": 0,
+    "expected_counterexample_cases": 6,
+    "logical_overlap_events_in_negative_controls": 3,
+    "bad_frame_events_in_negative_controls": 2,
+    "source_hashes_unchanged_during_suite": true,
+    "real_device_access": false,
+    "real_process_SIGKILL_or_dma_executed": false,
+    "target_route_enabled": false,
+    "target_sync_or_restore_contract_proven": false,
+    "keeper_crash_safety_resolved": false
+  },
+  "trace_verification": {
+    "cases_verified": 34,
+    "trace_events_replayed": 386,
+    "safe_copy_events_replayed": 35,
+    "model_retirement_acceptances_replayed": 2,
+    "expected_overlap_cases": [
+      "unsafe-current-index",
+      "unsafe-irq",
+      "unsafe-pan-return"
+    ],
+    "expected_bad_frame_cases": [
+      "hidden-offset-error",
+      "missing-cache-handoff"
+    ],
+    "tested_source_hashes_match": true,
+    "source_import_allowlist_checked": true,
+    "real_target_safety_proven": false
+  },
+  "copy_trials": 39,
+  "visible_component_samples_compared": 5751162,
+  "tested_sources_sha256": {
+    "layouts.py": "6afe93a326d31cfda6924b978374afce7feec46d7f977e5d0790248ddbda1889",
+    "model.py": "78ba7eb32001f5d7f6bdf9438176ba0c8c484174dea80aad81cde469c3d89d08",
+    "run_suite.py": "f37d1b5b1427d7005d847c10ff88be12e39d996ea04652d2ce8cf9fe98782f68"
+  },
+  "case_names": [
+    "activate-restore-mismatch",
+    "address-update-error",
+    "allocation-identity-changed",
+    "allocation-restore-mismatch",
+    "blank-success-no-stop",
+    "clean-journal-allocation-changed",
+    "controller-crash-restart",
+    "copy-failure-quarantine",
+    "copy-layout-matrix",
+    "corrupt-journals",
+    "exact-restore-positive-control",
+    "finite-interleavings",
+    "hidden-offset-error",
+    "hidden-select-error",
+    "initial-completion-credit",
+    "invalid-copy-atomic",
+    "keeper-crash-restart",
+    "late-retirement-stays-quarantined",
+    "matrix-restore-mismatch",
+    "missing-cache-handoff",
+    "naive-contiguous-copy-counterexample",
+    "normal-retirement",
+    "pan-wait-timeout",
+    "partial-copy-crash-restart",
+    "pending-backpressure",
+    "producer-reuse-after-copy",
+    "reallocation-preflight-refusal",
+    "restore-with-pending-submission",
+    "stale-epoch-retirement",
+    "target-evidence-gate",
+    "unsafe-current-index",
+    "unsafe-irq",
+    "unsafe-pan-return",
+    "worker-crash-restart"
+  ]
+}
