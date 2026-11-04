@@ -1,0 +1,186 @@
+[
+  {
+    "scope": "synthetic host fixture, software decoded; not VPU output",
+    "width": 1280,
+    "height": 720,
+    "frames": 30,
+    "reference": "independent Python BT.601 limited-range integer arithmetic, full-frame nearest aspect-fit RGB565LE",
+    "ffmpeg": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+    "commands": [
+      [
+        "/usr/bin/ffmpeg",
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=1280x720:rate=10",
+        "-frames:v",
+        "30",
+        "-threads",
+        "1",
+        "-c:v",
+        "libx264",
+        "-profile:v",
+        "baseline",
+        "-level",
+        "3.1",
+        "-pix_fmt",
+        "yuv420p",
+        "-bf",
+        "0",
+        "-x264-params",
+        "aud=1:repeat-headers=1:keyint=10:scenecut=0:threads=1",
+        "-f",
+        "h264",
+        "/tmp/p7-fixture-720/fixture.h264"
+      ],
+      [
+        "/usr/bin/ffmpeg",
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-hwaccel",
+        "none",
+        "-threads",
+        "1",
+        "-i",
+        "/tmp/p7-fixture-720/fixture.h264",
+        "-pix_fmt",
+        "yuv420p",
+        "-f",
+        "rawvideo",
+        "/tmp/p7-fixture-720/fixture.i420"
+      ]
+    ],
+    "rgb_fnv1a64": [
+      "ba55e3df42efd4c2",
+      "9f8e4793fc777fa1",
+      "8f5da7dd3978bd50",
+      "454d7bb29bd3bf66",
+      "91a95acaca73b08a",
+      "3008178e6b177158",
+      "aa3f9bceb9139aec",
+      "3b56da601b63adec",
+      "d6119bb1856c4089",
+      "7c381767d311adff",
+      "b34fda21c080af15",
+      "ba552ed81a6b11b1",
+      "fbfeb5ab20551ac8",
+      "89031433caba339e",
+      "8c777415985e8ac3",
+      "a2862a0d23f0a83c",
+      "4b7c371d87a8cdf1",
+      "c0169b91939fef98",
+      "1f8e40c1c5eb089c",
+      "0eb8e15729d09369",
+      "5047e8fb8041d7c7",
+      "ee3f9552326f4fd7",
+      "e8045354ca7e695d",
+      "45e43c67cccf0315",
+      "2f07c2dbbec359ee",
+      "c3b2c64ea336dde9",
+      "45905b5efb6e042f",
+      "0a49a84bfb874af5",
+      "e679885c8e545ace",
+      "4f13a4fd5155e9f6"
+    ],
+    "files": {
+      "fixture.h264": {
+        "bytes": 657774,
+        "sha256": "22f3193a843298c5e8aaac36360a7d239f90b7f1d24d7df322c05aadd4e912ad"
+      },
+      "fixture.i420": {
+        "bytes": 41472000,
+        "sha256": "513ecf7b0fdc942541f00018a2a39394b8982c1b6fed21b14a1e54133f314574"
+      },
+      "fixture.p7au": {
+        "bytes": 658154,
+        "sha256": "d60fb24b4fca0cb060752fa1a14bd359638e8c4789b4650ceaaa32c675e9e126"
+      }
+    }
+  },
+  {
+    "scope": "synthetic host fixture, software decoded; not VPU output",
+    "width": 320,
+    "height": 240,
+    "frames": 6,
+    "reference": "independent Python BT.601 limited-range integer arithmetic, full-frame nearest aspect-fit RGB565LE",
+    "ffmpeg": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+    "commands": [
+      [
+        "/usr/bin/ffmpeg",
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=320x240:rate=10",
+        "-frames:v",
+        "6",
+        "-threads",
+        "1",
+        "-c:v",
+        "libx264",
+        "-profile:v",
+        "baseline",
+        "-level",
+        "3.1",
+        "-pix_fmt",
+        "yuv420p",
+        "-bf",
+        "0",
+        "-x264-params",
+        "aud=1:repeat-headers=1:keyint=10:scenecut=0:threads=1",
+        "-f",
+        "h264",
+        "/tmp/p7-headless-final-ubsan/fixture-320x240/fixture.h264"
+      ],
+      [
+        "/usr/bin/ffmpeg",
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-hwaccel",
+        "none",
+        "-threads",
+        "1",
+        "-i",
+        "/tmp/p7-headless-final-ubsan/fixture-320x240/fixture.h264",
+        "-pix_fmt",
+        "yuv420p",
+        "-f",
+        "rawvideo",
+        "/tmp/p7-headless-final-ubsan/fixture-320x240/fixture.i420"
+      ]
+    ],
+    "rgb_fnv1a64": [
+      "a9fd693e74035175",
+      "5b85be2780fc4e8e",
+      "e28ffc73e5634bb2",
+      "e16ff1d134bb7cc4",
+      "ec9f6cb30ff24ef0",
+      "b52742877bdf70ad"
+    ],
+    "files": {
+      "fixture.h264": {
+        "bytes": 16393,
+        "sha256": "d77223aed0b92e82145618fb19c63747e698633444368fd48c270ad882aa5d91"
+      },
+      "fixture.i420": {
+        "bytes": 691200,
+        "sha256": "0b76f29b85b2524f91d147c44c259afee762883c7a0b1e320bf95f34eb2ad24a"
+      },
+      "fixture.p7au": {
+        "bytes": 16485,
+        "sha256": "d22bb75f7d0e70bf300524f54fc0fdf3455d2da9057436dbac198f1d92432101"
+      }
+    }
+  }
+]

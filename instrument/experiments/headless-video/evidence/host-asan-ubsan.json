@@ -1,0 +1,1422 @@
+{
+  "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+  "hardware_run": false,
+  "asan": true,
+  "leak_check": false,
+  "machine": "x86_64",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "compiler": "cc (Debian 14.2.0-19) 14.2.0",
+  "sources": {
+    "instrument/experiments/headless-video/headless.c": "a6beed2901bc0b48d00db3f1150ee53f4a77c7e0d383fdf973293d0a4ccc9b73",
+    "instrument/native/ic_preflight.c": "5fda75c7beccbf5a2f0a121efd3c67f56317c72ccf5cd3d89919e46eb7d76147",
+    "instrument/native/ic_pixels.c": "dad22ba4e8eecbf97913b17c242aee2875c3b275cf77f51a878a3f3c193a407c",
+    "instrument/native/pixels_simd/row_scalar.c": "65d8d12e377f9a7ae8dd7a90b272ff82c51b34458aa29a2e248e06be2b966547"
+  },
+  "cases": [
+    {
+      "name": "continuous-1280",
+      "exit": 0,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "ok",
+        "declared_aus": 30,
+        "read_aus": 30,
+        "accepted_aus": 30,
+        "converted_frames": 30,
+        "released_frames": 30,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 30,
+        "stage_ns": {
+          "preflight": 1997636,
+          "fake_submit": 6980,
+          "fixture_yuv_read": 10748364,
+          "conversion": 68606499,
+          "parity_oracle": 95871397,
+          "checksum": 17684300,
+          "total": 216494935
+        },
+        "hashes": [
+          "ba55e3df42efd4c2",
+          "9f8e4793fc777fa1",
+          "8f5da7dd3978bd50",
+          "454d7bb29bd3bf66",
+          "91a95acaca73b08a",
+          "3008178e6b177158",
+          "aa3f9bceb9139aec",
+          "3b56da601b63adec",
+          "d6119bb1856c4089",
+          "7c381767d311adff",
+          "b34fda21c080af15",
+          "ba552ed81a6b11b1",
+          "fbfeb5ab20551ac8",
+          "89031433caba339e",
+          "8c777415985e8ac3",
+          "a2862a0d23f0a83c",
+          "4b7c371d87a8cdf1",
+          "c0169b91939fef98",
+          "1f8e40c1c5eb089c",
+          "0eb8e15729d09369",
+          "5047e8fb8041d7c7",
+          "ee3f9552326f4fd7",
+          "e8045354ca7e695d",
+          "45e43c67cccf0315",
+          "2f07c2dbbec359ee",
+          "c3b2c64ea336dde9",
+          "45905b5efb6e042f",
+          "0a49a84bfb874af5",
+          "e679885c8e545ace",
+          "4f13a4fd5155e9f6"
+        ],
+        "conversion_ns": {
+          "samples": 30,
+          "p50": 2097488,
+          "p95": 3740350,
+          "p99": 3953726,
+          "max": 3953726
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "delayed-no-eos-1280",
+      "exit": 0,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "ok",
+        "declared_aus": 30,
+        "read_aus": 30,
+        "accepted_aus": 30,
+        "converted_frames": 29,
+        "released_frames": 29,
+        "undrained_aus": 1,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 29,
+        "stage_ns": {
+          "preflight": 2357567,
+          "fake_submit": 5687,
+          "fixture_yuv_read": 13104573,
+          "conversion": 70424891,
+          "parity_oracle": 101269898,
+          "checksum": 19791965,
+          "total": 228717053
+        },
+        "hashes": [
+          "ba55e3df42efd4c2",
+          "9f8e4793fc777fa1",
+          "8f5da7dd3978bd50",
+          "454d7bb29bd3bf66",
+          "91a95acaca73b08a",
+          "3008178e6b177158",
+          "aa3f9bceb9139aec",
+          "3b56da601b63adec",
+          "d6119bb1856c4089",
+          "7c381767d311adff",
+          "b34fda21c080af15",
+          "ba552ed81a6b11b1",
+          "fbfeb5ab20551ac8",
+          "89031433caba339e",
+          "8c777415985e8ac3",
+          "a2862a0d23f0a83c",
+          "4b7c371d87a8cdf1",
+          "c0169b91939fef98",
+          "1f8e40c1c5eb089c",
+          "0eb8e15729d09369",
+          "5047e8fb8041d7c7",
+          "ee3f9552326f4fd7",
+          "e8045354ca7e695d",
+          "45e43c67cccf0315",
+          "2f07c2dbbec359ee",
+          "c3b2c64ea336dde9",
+          "45905b5efb6e042f",
+          "0a49a84bfb874af5",
+          "e679885c8e545ace"
+        ],
+        "conversion_ns": {
+          "samples": 29,
+          "p50": 2250115,
+          "p95": 3367295,
+          "p99": 4975673,
+          "max": 4975673
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "continuous-320",
+      "exit": 0,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "ok",
+        "declared_aus": 6,
+        "read_aus": 6,
+        "accepted_aus": 6,
+        "converted_frames": 6,
+        "released_frames": 6,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 6,
+        "stage_ns": {
+          "preflight": 147200,
+          "fake_submit": 640,
+          "fixture_yuv_read": 206100,
+          "conversion": 11576374,
+          "parity_oracle": 16365853,
+          "checksum": 4088864,
+          "total": 38634766
+        },
+        "hashes": [
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad"
+        ],
+        "conversion_ns": {
+          "samples": 6,
+          "p50": 1819266,
+          "p95": 2543726,
+          "p99": 2543726,
+          "max": 2543726
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "delayed-no-eos-320",
+      "exit": 0,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "ok",
+        "declared_aus": 6,
+        "read_aus": 6,
+        "accepted_aus": 6,
+        "converted_frames": 5,
+        "released_frames": 5,
+        "undrained_aus": 1,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 5,
+        "stage_ns": {
+          "preflight": 152485,
+          "fake_submit": 729,
+          "fixture_yuv_read": 169451,
+          "conversion": 11218526,
+          "parity_oracle": 19025133,
+          "checksum": 7142116,
+          "total": 42156242
+        },
+        "hashes": [
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0"
+        ],
+        "conversion_ns": {
+          "samples": 5,
+          "p50": 1681816,
+          "p95": 4185324,
+          "p99": 4185324,
+          "max": 4185324
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "submit-first",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fake_submit_error",
+        "declared_aus": 30,
+        "read_aus": 1,
+        "accepted_aus": 0,
+        "converted_frames": 0,
+        "released_frames": 0,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 0,
+        "stage_ns": {
+          "preflight": 86904,
+          "fake_submit": 106,
+          "fixture_yuv_read": 0,
+          "conversion": 0,
+          "parity_oracle": 0,
+          "checksum": 0,
+          "total": 545743
+        },
+        "hashes": [],
+        "conversion_ns": {
+          "samples": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "submit-third",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fake_submit_error",
+        "declared_aus": 30,
+        "read_aus": 3,
+        "accepted_aus": 2,
+        "converted_frames": 2,
+        "released_frames": 2,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 2,
+        "stage_ns": {
+          "preflight": 600383,
+          "fake_submit": 435,
+          "fixture_yuv_read": 1178260,
+          "conversion": 5147040,
+          "parity_oracle": 7985562,
+          "checksum": 1483000,
+          "total": 18281536
+        },
+        "hashes": [
+          "ba55e3df42efd4c2",
+          "9f8e4793fc777fa1"
+        ],
+        "conversion_ns": {
+          "samples": 2,
+          "p50": 2501596,
+          "p95": 2645444,
+          "p99": 2645444,
+          "max": 2645444
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "decode-first",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fake_decode_or_callback_error",
+        "declared_aus": 30,
+        "read_aus": 1,
+        "accepted_aus": 1,
+        "converted_frames": 0,
+        "released_frames": 0,
+        "undrained_aus": 1,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 0,
+        "stage_ns": {
+          "preflight": 85616,
+          "fake_submit": 95,
+          "fixture_yuv_read": 0,
+          "conversion": 0,
+          "parity_oracle": 0,
+          "checksum": 0,
+          "total": 382806
+        },
+        "hashes": [],
+        "conversion_ns": {
+          "samples": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "decode-third",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fake_decode_or_callback_error",
+        "declared_aus": 30,
+        "read_aus": 3,
+        "accepted_aus": 3,
+        "converted_frames": 2,
+        "released_frames": 2,
+        "undrained_aus": 1,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 2,
+        "stage_ns": {
+          "preflight": 422821,
+          "fake_submit": 519,
+          "fixture_yuv_read": 1352109,
+          "conversion": 4889833,
+          "parity_oracle": 7332985,
+          "checksum": 1923848,
+          "total": 19150471
+        },
+        "hashes": [
+          "ba55e3df42efd4c2",
+          "9f8e4793fc777fa1"
+        ],
+        "conversion_ns": {
+          "samples": 2,
+          "p50": 2203625,
+          "p95": 2686208,
+          "p99": 2686208,
+          "max": 2686208
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "callback-reject",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fake_decode_or_callback_error",
+        "declared_aus": 30,
+        "read_aus": 3,
+        "accepted_aus": 3,
+        "converted_frames": 3,
+        "released_frames": 3,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 3,
+        "stage_ns": {
+          "preflight": 1981086,
+          "fake_submit": 389,
+          "fixture_yuv_read": 9486710,
+          "conversion": 9183045,
+          "parity_oracle": 19583571,
+          "checksum": 2795381,
+          "total": 46951320
+        },
+        "hashes": [
+          "ba55e3df42efd4c2",
+          "9f8e4793fc777fa1",
+          "8f5da7dd3978bd50"
+        ],
+        "conversion_ns": {
+          "samples": 3,
+          "p50": 3202049,
+          "p95": 3346783,
+          "p99": 3346783,
+          "max": 3346783
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "close-failure",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fake_close_error",
+        "declared_aus": 30,
+        "read_aus": 30,
+        "accepted_aus": 30,
+        "converted_frames": 30,
+        "released_frames": 30,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 30,
+        "stage_ns": {
+          "preflight": 2572192,
+          "fake_submit": 7078,
+          "fixture_yuv_read": 11591248,
+          "conversion": 75965727,
+          "parity_oracle": 120223510,
+          "checksum": 21512881,
+          "total": 260751799
+        },
+        "hashes": [
+          "ba55e3df42efd4c2",
+          "9f8e4793fc777fa1",
+          "8f5da7dd3978bd50",
+          "454d7bb29bd3bf66",
+          "91a95acaca73b08a",
+          "3008178e6b177158",
+          "aa3f9bceb9139aec",
+          "3b56da601b63adec",
+          "d6119bb1856c4089",
+          "7c381767d311adff",
+          "b34fda21c080af15",
+          "ba552ed81a6b11b1",
+          "fbfeb5ab20551ac8",
+          "89031433caba339e",
+          "8c777415985e8ac3",
+          "a2862a0d23f0a83c",
+          "4b7c371d87a8cdf1",
+          "c0169b91939fef98",
+          "1f8e40c1c5eb089c",
+          "0eb8e15729d09369",
+          "5047e8fb8041d7c7",
+          "ee3f9552326f4fd7",
+          "e8045354ca7e695d",
+          "45e43c67cccf0315",
+          "2f07c2dbbec359ee",
+          "c3b2c64ea336dde9",
+          "45905b5efb6e042f",
+          "0a49a84bfb874af5",
+          "e679885c8e545ace",
+          "4f13a4fd5155e9f6"
+        ],
+        "conversion_ns": {
+          "samples": 30,
+          "p50": 2281499,
+          "p95": 4121082,
+          "p99": 4967388,
+          "max": 4967388
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "truncated-header",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fixture_header_error",
+        "declared_aus": 0,
+        "read_aus": 0,
+        "accepted_aus": 0,
+        "converted_frames": 0,
+        "released_frames": 0,
+        "undrained_aus": 0,
+        "close_attempts": 0,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 0,
+        "stage_ns": {
+          "preflight": 0,
+          "fake_submit": 0,
+          "fixture_yuv_read": 0,
+          "conversion": 0,
+          "parity_oracle": 0,
+          "checksum": 0,
+          "total": 283399
+        },
+        "hashes": [],
+        "conversion_ns": {
+          "samples": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "bad-magic",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fixture_header_error",
+        "declared_aus": 0,
+        "read_aus": 0,
+        "accepted_aus": 0,
+        "converted_frames": 0,
+        "released_frames": 0,
+        "undrained_aus": 0,
+        "close_attempts": 0,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 0,
+        "stage_ns": {
+          "preflight": 0,
+          "fake_submit": 0,
+          "fixture_yuv_read": 0,
+          "conversion": 0,
+          "parity_oracle": 0,
+          "checksum": 0,
+          "total": 145332
+        },
+        "hashes": [],
+        "conversion_ns": {
+          "samples": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "too-many-frames",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fixture_header_error",
+        "declared_aus": 121,
+        "read_aus": 0,
+        "accepted_aus": 0,
+        "converted_frames": 0,
+        "released_frames": 0,
+        "undrained_aus": 0,
+        "close_attempts": 0,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 0,
+        "stage_ns": {
+          "preflight": 0,
+          "fake_submit": 0,
+          "fixture_yuv_read": 0,
+          "conversion": 0,
+          "parity_oracle": 0,
+          "checksum": 0,
+          "total": 236059
+        },
+        "hashes": [],
+        "conversion_ns": {
+          "samples": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "odd-width",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fixture_header_error",
+        "declared_aus": 30,
+        "read_aus": 0,
+        "accepted_aus": 0,
+        "converted_frames": 0,
+        "released_frames": 0,
+        "undrained_aus": 0,
+        "close_attempts": 0,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 0,
+        "stage_ns": {
+          "preflight": 0,
+          "fake_submit": 0,
+          "fixture_yuv_read": 0,
+          "conversion": 0,
+          "parity_oracle": 0,
+          "checksum": 0,
+          "total": 324282
+        },
+        "hashes": [],
+        "conversion_ns": {
+          "samples": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "empty-au",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fixture_record_error",
+        "declared_aus": 30,
+        "read_aus": 0,
+        "accepted_aus": 0,
+        "converted_frames": 0,
+        "released_frames": 0,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 0,
+        "stage_ns": {
+          "preflight": 0,
+          "fake_submit": 0,
+          "fixture_yuv_read": 0,
+          "conversion": 0,
+          "parity_oracle": 0,
+          "checksum": 0,
+          "total": 369569
+        },
+        "hashes": [],
+        "conversion_ns": {
+          "samples": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "oversize-au",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fixture_record_error",
+        "declared_aus": 30,
+        "read_aus": 0,
+        "accepted_aus": 0,
+        "converted_frames": 0,
+        "released_frames": 0,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 0,
+        "stage_ns": {
+          "preflight": 0,
+          "fake_submit": 0,
+          "fixture_yuv_read": 0,
+          "conversion": 0,
+          "parity_oracle": 0,
+          "checksum": 0,
+          "total": 266756
+        },
+        "hashes": [],
+        "conversion_ns": {
+          "samples": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "truncated-au",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fixture_record_error",
+        "declared_aus": 30,
+        "read_aus": 0,
+        "accepted_aus": 0,
+        "converted_frames": 0,
+        "released_frames": 0,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 0,
+        "stage_ns": {
+          "preflight": 0,
+          "fake_submit": 0,
+          "fixture_yuv_read": 0,
+          "conversion": 0,
+          "parity_oracle": 0,
+          "checksum": 0,
+          "total": 455562
+        },
+        "hashes": [],
+        "conversion_ns": {
+          "samples": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "trailing-data",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "trailing_fixture_data",
+        "declared_aus": 30,
+        "read_aus": 30,
+        "accepted_aus": 30,
+        "converted_frames": 30,
+        "released_frames": 30,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 30,
+        "stage_ns": {
+          "preflight": 2004971,
+          "fake_submit": 5444,
+          "fixture_yuv_read": 8844800,
+          "conversion": 83564130,
+          "parity_oracle": 120646861,
+          "checksum": 20824995,
+          "total": 261438660
+        },
+        "hashes": [
+          "ba55e3df42efd4c2",
+          "9f8e4793fc777fa1",
+          "8f5da7dd3978bd50",
+          "454d7bb29bd3bf66",
+          "91a95acaca73b08a",
+          "3008178e6b177158",
+          "aa3f9bceb9139aec",
+          "3b56da601b63adec",
+          "d6119bb1856c4089",
+          "7c381767d311adff",
+          "b34fda21c080af15",
+          "ba552ed81a6b11b1",
+          "fbfeb5ab20551ac8",
+          "89031433caba339e",
+          "8c777415985e8ac3",
+          "a2862a0d23f0a83c",
+          "4b7c371d87a8cdf1",
+          "c0169b91939fef98",
+          "1f8e40c1c5eb089c",
+          "0eb8e15729d09369",
+          "5047e8fb8041d7c7",
+          "ee3f9552326f4fd7",
+          "e8045354ca7e695d",
+          "45e43c67cccf0315",
+          "2f07c2dbbec359ee",
+          "c3b2c64ea336dde9",
+          "45905b5efb6e042f",
+          "0a49a84bfb874af5",
+          "e679885c8e545ace",
+          "4f13a4fd5155e9f6"
+        ],
+        "conversion_ns": {
+          "samples": 30,
+          "p50": 2360653,
+          "p95": 5241289,
+          "p99": 6077575,
+          "max": 6077575
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "dimension-size-check",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fixture_header_error",
+        "declared_aus": 30,
+        "read_aus": 0,
+        "accepted_aus": 0,
+        "converted_frames": 0,
+        "released_frames": 0,
+        "undrained_aus": 0,
+        "close_attempts": 0,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 0,
+        "stage_ns": {
+          "preflight": 0,
+          "fake_submit": 0,
+          "fixture_yuv_read": 0,
+          "conversion": 0,
+          "parity_oracle": 0,
+          "checksum": 0,
+          "total": 206254
+        },
+        "hashes": [],
+        "conversion_ns": {
+          "samples": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "preflight-dimension-mismatch",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "preflight_rejected",
+        "declared_aus": 30,
+        "read_aus": 1,
+        "accepted_aus": 0,
+        "converted_frames": 0,
+        "released_frames": 0,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 0,
+        "stage_ns": {
+          "preflight": 140244,
+          "fake_submit": 0,
+          "fixture_yuv_read": 0,
+          "conversion": 0,
+          "parity_oracle": 0,
+          "checksum": 0,
+          "total": 1668891
+        },
+        "hashes": [],
+        "conversion_ns": {
+          "samples": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "no-parity-equivalence",
+      "exit": 0,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "ok",
+        "declared_aus": 30,
+        "read_aus": 30,
+        "accepted_aus": 30,
+        "converted_frames": 30,
+        "released_frames": 30,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": false,
+        "parity_checked_frames": 0,
+        "stage_ns": {
+          "preflight": 2973081,
+          "fake_submit": 5644,
+          "fixture_yuv_read": 9820447,
+          "conversion": 81420879,
+          "parity_oracle": 0,
+          "checksum": 19657042,
+          "total": 138823849
+        },
+        "hashes": [
+          "ba55e3df42efd4c2",
+          "9f8e4793fc777fa1",
+          "8f5da7dd3978bd50",
+          "454d7bb29bd3bf66",
+          "91a95acaca73b08a",
+          "3008178e6b177158",
+          "aa3f9bceb9139aec",
+          "3b56da601b63adec",
+          "d6119bb1856c4089",
+          "7c381767d311adff",
+          "b34fda21c080af15",
+          "ba552ed81a6b11b1",
+          "fbfeb5ab20551ac8",
+          "89031433caba339e",
+          "8c777415985e8ac3",
+          "a2862a0d23f0a83c",
+          "4b7c371d87a8cdf1",
+          "c0169b91939fef98",
+          "1f8e40c1c5eb089c",
+          "0eb8e15729d09369",
+          "5047e8fb8041d7c7",
+          "ee3f9552326f4fd7",
+          "e8045354ca7e695d",
+          "45e43c67cccf0315",
+          "2f07c2dbbec359ee",
+          "c3b2c64ea336dde9",
+          "45905b5efb6e042f",
+          "0a49a84bfb874af5",
+          "e679885c8e545ace",
+          "4f13a4fd5155e9f6"
+        ],
+        "conversion_ns": {
+          "samples": 30,
+          "p50": 2499438,
+          "p95": 4571601,
+          "p99": 4781838,
+          "max": 4781838
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "frame-count-boundary-1",
+      "exit": 0,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "ok",
+        "declared_aus": 1,
+        "read_aus": 1,
+        "accepted_aus": 1,
+        "converted_frames": 1,
+        "released_frames": 1,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 1,
+        "stage_ns": {
+          "preflight": 41381,
+          "fake_submit": 95,
+          "fixture_yuv_read": 63249,
+          "conversion": 4886019,
+          "parity_oracle": 8316954,
+          "checksum": 455918,
+          "total": 18877397
+        },
+        "hashes": [
+          "a9fd693e74035175"
+        ],
+        "conversion_ns": {
+          "samples": 1,
+          "p50": 4886019,
+          "p95": 4886019,
+          "p99": 4886019,
+          "max": 4886019
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "frame-count-boundary-120",
+      "exit": 0,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "ok",
+        "declared_aus": 120,
+        "read_aus": 120,
+        "accepted_aus": 120,
+        "converted_frames": 120,
+        "released_frames": 120,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 120,
+        "stage_ns": {
+          "preflight": 7913717,
+          "fake_submit": 75724,
+          "fixture_yuv_read": 10629977,
+          "conversion": 526107683,
+          "parity_oracle": 740878960,
+          "checksum": 179964325,
+          "total": 1659051672
+        },
+        "hashes": [
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad",
+          "a9fd693e74035175",
+          "5b85be2780fc4e8e",
+          "e28ffc73e5634bb2",
+          "e16ff1d134bb7cc4",
+          "ec9f6cb30ff24ef0",
+          "b52742877bdf70ad"
+        ],
+        "conversion_ns": {
+          "samples": 120,
+          "p50": 3973913,
+          "p95": 7928219,
+          "p99": 10667101,
+          "max": 11693725
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "cooperative --test-sigint",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "interrupted_between_calls",
+        "declared_aus": 30,
+        "read_aus": 3,
+        "accepted_aus": 3,
+        "converted_frames": 3,
+        "released_frames": 3,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 3,
+        "stage_ns": {
+          "preflight": 585763,
+          "fake_submit": 510,
+          "fixture_yuv_read": 4474387,
+          "conversion": 27808785,
+          "parity_oracle": 37054012,
+          "checksum": 2451146,
+          "total": 78664258
+        },
+        "hashes": [
+          "ba55e3df42efd4c2",
+          "9f8e4793fc777fa1",
+          "8f5da7dd3978bd50"
+        ],
+        "conversion_ns": {
+          "samples": 3,
+          "p50": 7802232,
+          "p95": 14598116,
+          "p99": 14598116,
+          "max": 14598116
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "cooperative --test-sigterm",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "interrupted_between_calls",
+        "declared_aus": 30,
+        "read_aus": 3,
+        "accepted_aus": 3,
+        "converted_frames": 3,
+        "released_frames": 3,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 3,
+        "stage_ns": {
+          "preflight": 216276,
+          "fake_submit": 408,
+          "fixture_yuv_read": 1760829,
+          "conversion": 6894193,
+          "parity_oracle": 11273375,
+          "checksum": 3184309,
+          "total": 25932694
+        },
+        "hashes": [
+          "ba55e3df42efd4c2",
+          "9f8e4793fc777fa1",
+          "8f5da7dd3978bd50"
+        ],
+        "conversion_ns": {
+          "samples": 3,
+          "p50": 2145987,
+          "p95": 2635981,
+          "p99": 2635981,
+          "max": 2635981
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "high-profile-rejected",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "preflight_rejected",
+        "declared_aus": 30,
+        "read_aus": 1,
+        "accepted_aus": 0,
+        "converted_frames": 0,
+        "released_frames": 0,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 0,
+        "stage_ns": {
+          "preflight": 22713,
+          "fake_submit": 0,
+          "fixture_yuv_read": 0,
+          "conversion": 0,
+          "parity_oracle": 0,
+          "checksum": 0,
+          "total": 328146
+        },
+        "hashes": [],
+        "conversion_ns": {
+          "samples": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "truncated-yuv",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fixture_header_error",
+        "declared_aus": 30,
+        "read_aus": 0,
+        "accepted_aus": 0,
+        "converted_frames": 0,
+        "released_frames": 0,
+        "undrained_aus": 0,
+        "close_attempts": 0,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 0,
+        "stage_ns": {
+          "preflight": 0,
+          "fake_submit": 0,
+          "fixture_yuv_read": 0,
+          "conversion": 0,
+          "parity_oracle": 0,
+          "checksum": 0,
+          "total": 193507
+        },
+        "hashes": [],
+        "conversion_ns": {
+          "samples": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "checksum-detects-yuv-change",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fake_decode_or_callback_error",
+        "declared_aus": 30,
+        "read_aus": 1,
+        "accepted_aus": 1,
+        "converted_frames": 0,
+        "released_frames": 1,
+        "undrained_aus": 0,
+        "close_attempts": 1,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 1,
+        "stage_ns": {
+          "preflight": 1239954,
+          "fake_submit": 133,
+          "fixture_yuv_read": 1981085,
+          "conversion": 9971091,
+          "parity_oracle": 9998886,
+          "checksum": 2008116,
+          "total": 28963419
+        },
+        "hashes": [],
+        "conversion_ns": {
+          "samples": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "stderr": "fixture RGB checksum mismatch\n"
+    },
+    {
+      "name": "reject-symlink",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fixture_header_error",
+        "declared_aus": 0,
+        "read_aus": 0,
+        "accepted_aus": 0,
+        "converted_frames": 0,
+        "released_frames": 0,
+        "undrained_aus": 0,
+        "close_attempts": 0,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 0,
+        "stage_ns": {
+          "preflight": 0,
+          "fake_submit": 0,
+          "fixture_yuv_read": 0,
+          "conversion": 0,
+          "parity_oracle": 0,
+          "checksum": 0,
+          "total": 23489
+        },
+        "hashes": [],
+        "conversion_ns": {
+          "samples": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "reject-fifo-without-opening-reader",
+      "exit": 1,
+      "result": {
+        "scope": "HOST_FIXTURE_REPLAY_NOT_VPU",
+        "status": "fixture_header_error",
+        "declared_aus": 0,
+        "read_aus": 0,
+        "accepted_aus": 0,
+        "converted_frames": 0,
+        "released_frames": 0,
+        "undrained_aus": 0,
+        "close_attempts": 0,
+        "scalar_gather_parity_enabled": true,
+        "parity_checked_frames": 0,
+        "stage_ns": {
+          "preflight": 0,
+          "fake_submit": 0,
+          "fixture_yuv_read": 0,
+          "conversion": 0,
+          "parity_oracle": 0,
+          "checksum": 0,
+          "total": 18255
+        },
+        "hashes": [],
+        "conversion_ns": {
+          "samples": 0,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 0
+        }
+      },
+      "stderr": ""
+    },
+    {
+      "name": "CLI ['--backend=vpu', '--aus', '/nonexistent', '--yuv', '/nonexistent']",
+      "exit": 78,
+      "stderr": "BLOCKED: no VPU backend is built; DMA exit safety and hardware authorization unresolved\n"
+    },
+    {
+      "name": "CLI ['--backend=unknown']",
+      "exit": 64,
+      "stderr": "Unknown/incomplete argument\n"
+    },
+    {
+      "name": "CLI ['--fail-submit', 'not-a-number']",
+      "exit": 64,
+      "stderr": ""
+    }
+  ],
+  "build_command": [
+    "cc",
+    "-std=c11",
+    "-O2",
+    "-g",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-fno-sanitize-recover=all",
+    "-fsanitize=address,undefined",
+    "-I",
+    "/workspace/shared/p7-headless-diagnostic/instrument/native",
+    "/workspace/shared/p7-headless-diagnostic/instrument/experiments/headless-video/headless.c",
+    "/workspace/shared/p7-headless-diagnostic/instrument/native/ic_preflight.c",
+    "/workspace/shared/p7-headless-diagnostic/instrument/native/ic_pixels.c",
+    "/workspace/shared/p7-headless-diagnostic/instrument/native/pixels_simd/row_scalar.c",
+    "-o",
+    "/tmp/p7-headless-final-asan/headless-host"
+  ],
+  "binary_sha256": "63a3b62ef07317526690c516428f494721d246ba6d669fe867535229bfa5d784",
+  "compile_time_vpu_gate": "rejected with expected diagnostic",
+  "signal_test_scope": "Test-only build raises real signal after third fake decode; proves handler/intercall stop only, never cancellation of an in-flight SDK call.",
+  "original_pixels_suite": "pixels: start colors\npixels: stride and fit\npixels: explicit crop and chroma\npixels: invalid arguments\npixels: 720p maximum\npixels: colors, LE, stride, crop, odd chroma, aspect-fit, bounds, alias, overflow, 720p PASS\n",
+  "result": "PASS",
+  "case_count": 33,
+  "limitations": [
+    "Fixture backend does not decode H.264, call libvpu or model firmware timing.",
+    "Actual unchanged preflight and default-off pixel converter are exercised; hardware decoder wrapper is not linked.",
+    "Scalar gather parity is not NEON/ARM runtime parity. No target compiler or QEMU installed in this environment.",
+    "Signal checks are cooperative between calls, never a hardware hang recovery claim.",
+    "Host timings include checks/poisoning/I/O; never convert these into vehicle FPS or speedup."
+  ]
+}
