@@ -1,0 +1,5 @@
+host-build/
+arm-build/
+ic_pixels_host.so
+*.o
+__pycache__/

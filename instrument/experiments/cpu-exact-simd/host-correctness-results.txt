@@ -1,0 +1,9 @@
+PASS row: 16777216 exhaustive YUV triples; lengths 0..570, exact-size tails and unaligned destination
+PASS frames: 1000 deterministic randomized source dimensions/strides/crops, all output bytes equal exact baseline
+HOST SCALAR PATH ONLY; NEON compilation/execution not tested
+pixels: start colors
+pixels: stride and fit
+pixels: explicit crop and chroma
+pixels: invalid arguments
+pixels: 720p maximum
+pixels: colors, LE, stride, crop, odd chroma, aspect-fit, bounds, alias, overflow, 720p PASS

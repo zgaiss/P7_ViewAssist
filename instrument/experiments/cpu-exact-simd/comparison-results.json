@@ -1,0 +1,300 @@
+{
+  "geometry": [
+    {
+      "source": [
+        1280,
+        720
+      ],
+      "crop": [
+        0,
+        0,
+        1280,
+        720
+      ],
+      "pattern": "luma",
+      "fit": [
+        560,
+        315
+      ],
+      "offset": [
+        0,
+        0
+      ],
+      "changed_pixels": 176400,
+      "max_native_channel_delta": [
+        31,
+        62,
+        31
+      ],
+      "luma_sample_differences": 176400
+    },
+    {
+      "source": [
+        1280,
+        720
+      ],
+      "crop": [
+        0,
+        0,
+        1280,
+        720
+      ],
+      "pattern": "chroma",
+      "fit": [
+        560,
+        315
+      ],
+      "offset": [
+        0,
+        0
+      ],
+      "changed_pixels": 140559,
+      "max_native_channel_delta": [
+        31,
+        63,
+        31
+      ],
+      "luma_sample_differences": 0
+    },
+    {
+      "source": [
+        320,
+        240
+      ],
+      "crop": [
+        0,
+        0,
+        320,
+        240
+      ],
+      "pattern": "luma",
+      "fit": [
+        420,
+        315
+      ],
+      "offset": [
+        70,
+        0
+      ],
+      "changed_pixels": 69888,
+      "max_native_channel_delta": [
+        31,
+        63,
+        31
+      ],
+      "luma_sample_differences": 73500
+    },
+    {
+      "source": [
+        320,
+        240
+      ],
+      "crop": [
+        0,
+        0,
+        320,
+        240
+      ],
+      "pattern": "chroma",
+      "fit": [
+        420,
+        315
+      ],
+      "offset": [
+        70,
+        0
+      ],
+      "changed_pixels": 47933,
+      "max_native_channel_delta": [
+        31,
+        63,
+        31
+      ],
+      "luma_sample_differences": 0
+    },
+    {
+      "source": [
+        1280,
+        720
+      ],
+      "crop": [
+        0,
+        0,
+        640,
+        360
+      ],
+      "pattern": "luma",
+      "fit": [
+        560,
+        315
+      ],
+      "offset": [
+        0,
+        0
+      ],
+      "changed_pixels": 113366,
+      "max_native_channel_delta": [
+        31,
+        63,
+        31
+      ],
+      "luma_sample_differences": 118800
+    },
+    {
+      "source": [
+        1280,
+        720
+      ],
+      "crop": [
+        0,
+        0,
+        640,
+        360
+      ],
+      "pattern": "chroma",
+      "fit": [
+        560,
+        315
+      ],
+      "offset": [
+        0,
+        0
+      ],
+      "changed_pixels": 87682,
+      "max_native_channel_delta": [
+        31,
+        63,
+        31
+      ],
+      "luma_sample_differences": 0
+    },
+    {
+      "source": [
+        7,
+        5
+      ],
+      "crop": [
+        3,
+        1,
+        3,
+        3
+      ],
+      "pattern": "luma",
+      "fit": [
+        315,
+        315
+      ],
+      "offset": [
+        122,
+        0
+      ],
+      "changed_pixels": 0,
+      "max_native_channel_delta": [
+        0,
+        0,
+        0
+      ],
+      "luma_sample_differences": 0
+    },
+    {
+      "source": [
+        7,
+        5
+      ],
+      "crop": [
+        3,
+        1,
+        3,
+        3
+      ],
+      "pattern": "chroma",
+      "fit": [
+        315,
+        315
+      ],
+      "offset": [
+        122,
+        0
+      ],
+      "changed_pixels": 30581,
+      "max_native_channel_delta": [
+        0,
+        3,
+        0
+      ],
+      "luma_sample_differences": 0
+    },
+    {
+      "source": [
+        7,
+        5
+      ],
+      "crop": [
+        6,
+        4,
+        1,
+        1
+      ],
+      "pattern": "luma",
+      "fit": [
+        315,
+        315
+      ],
+      "offset": [
+        122,
+        0
+      ],
+      "changed_pixels": 0,
+      "max_native_channel_delta": [
+        0,
+        0,
+        0
+      ],
+      "luma_sample_differences": 0
+    },
+    {
+      "source": [
+        7,
+        5
+      ],
+      "crop": [
+        6,
+        4,
+        1,
+        1
+      ],
+      "pattern": "chroma",
+      "fit": [
+        315,
+        315
+      ],
+      "offset": [
+        122,
+        0
+      ],
+      "changed_pixels": 0,
+      "max_native_channel_delta": [
+        0,
+        0,
+        0
+      ],
+      "luma_sample_differences": 0
+    }
+  ],
+  "colors": {
+    "input_combinations": 16777216,
+    "changed_combinations": 972541,
+    "max_native_channel_delta": [
+      1,
+      1,
+      1
+    ],
+    "first_difference": {
+      "y": 0,
+      "u": 141,
+      "v": 0,
+      "original": "0281",
+      "libyuv": "0280"
+    }
+  }
+}
