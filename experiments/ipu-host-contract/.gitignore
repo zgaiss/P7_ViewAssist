@@ -1,0 +1,6 @@
+results/*.o
+results/test_ipu
+results/test_ipu_asan
+results/test_pipe_bridge
+results/test_pipe_asan
+results/test_fixed
