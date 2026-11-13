@@ -164,18 +164,76 @@
             android:background="#66FFFFFF"
             android:layout_marginBottom="12dp"/>
 
-        <!-- v1.56 beta2：摄像头预览与镜头设置（原连点 10 次隐藏入口改为直接进入） -->
+        <!-- v1.61：按钮文案改为「默认开启」，连点 10 次才进入双路镜头预览调试页（隐藏入口） -->
         <Button
             android:id="@+id/btn_camera_test"
             android:layout_width="match_parent"
             android:layout_height="60dp"
             android:background="@drawable/bg_button"
             android:textColor="@color/text_white"
-            android:text="摄像头预览与镜头设置"
+            android:text="默认开启"
             android:textSize="18sp"
             android:layout_marginBottom="12dp"/>
 
-        <!-- v1.54 beta4：还原浮窗设置 与 右转向灯浮窗同步左转向灯浮窗 同一行 -->
+        <!-- v1.65 beta1：双闪联动影像开关（默认关）。开启后打双闪（左右转向灯同时亮）
+             同时触发左右两侧影像：优先窗显示左侧、次级窗显示右侧；关闭后打双闪不显示影像。 -->
+        <Button
+            android:id="@+id/btn_hazard_dual"
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:background="@drawable/bg_button"
+            android:textColor="@color/text_white"
+            android:text="双闪联动影像：关闭"
+            android:textSize="18sp"
+            android:layout_marginBottom="12dp"/>
+
+        <!-- v1.58：优先/次级双浮窗位置设置入口 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="优先、次级浮窗位置设置"
+            android:textColor="@color/text_white"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginTop="18dp"
+            android:layout_marginBottom="4dp"/>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#66FFFFFF"
+            android:layout_marginBottom="12dp"/>
+
+        <!-- v1.58：左状态 / 右状态——进入后同时弹出优先窗 P 与次级窗 S，拖动改位置、拖边改大小、双指缩放画面 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <Button
+                android:id="@+id/btn_slot_left"
+                android:layout_width="0dp"
+                android:layout_height="60dp"
+                android:layout_weight="1"
+                android:layout_marginEnd="6dp"
+                android:background="@drawable/bg_button"
+                android:textColor="@color/accent_gold"
+                android:text="左状态"
+                android:textSize="16sp"/>
+
+            <Button
+                android:id="@+id/btn_slot_right"
+                android:layout_width="0dp"
+                android:layout_height="60dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_button"
+                android:textColor="@color/accent_gold"
+                android:text="右状态"
+                android:textSize="16sp"/>
+        </LinearLayout>
+
+        <!-- v1.58：一键同步大小 / 复位浮窗位置 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -183,28 +241,26 @@
             android:layout_marginTop="8dp"
             android:gravity="center_vertical">
 
-            <!-- v1.43：一键还原左右转向浮窗位置/形状/画面缩放到默认，并把绑定视角归位 display-mode=8 -->
             <Button
-                android:id="@+id/btn_reset_overlay"
+                android:id="@+id/btn_slot_sync_size"
                 android:layout_width="0dp"
                 android:layout_height="60dp"
                 android:layout_weight="1"
                 android:layout_marginEnd="6dp"
                 android:background="@drawable/bg_button"
-                android:textColor="@color/accent_gold"
-                android:text="还原浮窗设置（位置/形状/画面/视角）"
-                android:textSize="14sp"/>
+                android:textColor="@color/text_white"
+                android:text="一键同步大小"
+                android:textSize="16sp"/>
 
-            <!-- v1.46：右浮窗对齐左浮窗（位置/大小/形状）；v1.54 beta4 改名 -->
             <Button
-                android:id="@+id/btn_align_right_to_left"
+                android:id="@+id/btn_slot_reset"
                 android:layout_width="0dp"
                 android:layout_height="60dp"
                 android:layout_weight="1"
                 android:background="@drawable/bg_button"
                 android:textColor="@color/text_white"
-                android:text="右转向灯浮窗同步左转向灯浮窗"
-                android:textSize="14sp"/>
+                android:text="复位浮窗位置"
+                android:textSize="16sp"/>
         </LinearLayout>
 
         <!-- v1.56 beta2：分区标题——预警辅助影像 -->
@@ -224,18 +280,19 @@
             android:background="#66FFFFFF"
             android:layout_marginBottom="12dp"/>
 
-        <!-- v1.52：BSD 盲区提醒开关（Phase 1 车机验证态，属性未确认时窄条显示灰色） -->
+        <!-- v1.65 beta1：BSD 自动弹窗（原小按钮升为大按钮，与「BSD 盲区提醒」互换位置）
+             开启后后车进盲区自动弹对应侧影像，默认开 -->
         <Button
-            android:id="@+id/btn_bsd"
+            android:id="@+id/btn_bsd_auto_overlay"
             android:layout_width="match_parent"
             android:layout_height="60dp"
             android:background="@drawable/bg_button"
             android:textColor="@color/text_white"
-            android:text="BSD 盲区提醒：关闭"
+            android:text="BSD 自动弹窗：开"
             android:textSize="18sp"
             android:layout_marginTop="8dp"/>
 
-        <!-- v1.56 beta2：BSD 开关类 2 个一行（无车常显 / 自动弹窗） -->
+        <!-- v1.56 beta2：BSD 开关类 2 个一行（无车常显 / 盲区提醒） -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -255,15 +312,16 @@
                 android:text="BSD 无车常显：关闭"
                 android:textSize="14sp"/>
 
-            <!-- v1.54：BSD 预警自动弹窗开关（开启后 BSD 预警自动弹对应侧摄像头浮窗，默认开） -->
+            <!-- v1.52：BSD 盲区提醒开关（Phase 1 车机验证态，属性未确认时窄条显示灰色）
+                 v1.65 beta1：原大按钮改为小按钮，与「BSD 自动弹窗」互换位置 -->
             <Button
-                android:id="@+id/btn_bsd_auto_overlay"
+                android:id="@+id/btn_bsd"
                 android:layout_width="0dp"
                 android:layout_height="60dp"
                 android:layout_weight="1"
                 android:background="@drawable/bg_button"
                 android:textColor="@color/text_white"
-                android:text="BSD 自动弹窗：开"
+                android:text="BSD 盲区提醒：关闭"
                 android:textSize="14sp"/>
         </LinearLayout>
 
@@ -278,56 +336,11 @@
             <!-- v1.54 beta3：BSD 预警红色遮罩开关（预警弹窗边界红色警示呼吸圈，默认开） -->
             <Button
                 android:id="@+id/btn_bsd_red_overlay"
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="60dp"
-                android:layout_weight="1"
-                android:layout_marginEnd="6dp"
                 android:background="@drawable/bg_button"
                 android:textColor="@color/text_white"
                 android:text="BSD 红遮罩：开"
-                android:textSize="14sp"/>
-
-            <!-- v1.54：BSD 常显窄条位置一键复位（清除 bsd_left/right_x/y，恢复默认位置） -->
-            <Button
-                android:id="@+id/btn_bsd_reset_pos"
-                android:layout_width="0dp"
-                android:layout_height="60dp"
-                android:layout_weight="1"
-                android:background="@drawable/bg_button"
-                android:textColor="@color/accent_gold"
-                android:text="BSD 位置复位"
-                android:textSize="14sp"/>
-        </LinearLayout>
-
-        <!-- v1.54 beta4：编辑预警浮窗 与 预警浮窗同步转向灯浮窗 同一行 -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginTop="8dp"
-            android:gravity="center_vertical">
-
-            <!-- v1.54 beta4：编辑预警浮窗——召唤/关闭左右预警窗编辑态（拖动/双击编辑/单独关闭保存） -->
-            <Button
-                android:id="@+id/btn_bsd_edit"
-                android:layout_width="0dp"
-                android:layout_height="60dp"
-                android:layout_weight="1"
-                android:layout_marginEnd="6dp"
-                android:background="@drawable/bg_button"
-                android:textColor="@color/accent_gold"
-                android:text="编辑预警浮窗"
-                android:textSize="16sp"/>
-
-            <!-- v1.54 beta4：预警浮窗同步转向灯浮窗（左对左/右对右：位置/大小/画面） -->
-            <Button
-                android:id="@+id/btn_bsd_sync"
-                android:layout_width="0dp"
-                android:layout_height="60dp"
-                android:layout_weight="1"
-                android:background="@drawable/bg_button"
-                android:textColor="@color/text_white"
-                android:text="预警浮窗同步转向灯浮窗"
                 android:textSize="16sp"/>
         </LinearLayout>
 
@@ -369,7 +382,53 @@
             android:textColor="@color/text_white"
             android:textSize="14sp"
             android:lineSpacingExtra="4dp"
-            android:text="使用说明：\n1. 首次开启「打灯联动」时，车机会弹出 ADB 配对确认，请点击确认；确认后应用会自动重启一次，重新进入即可正常使用。\n2. 浮窗操作：单指拖动浮窗到合适位置（松手自动保存）；双击浮窗进入编辑模式，单指平移画面、双指缩放画面、拖动黄色边缘调整窗口形状，再次双击退出并保存。\n3. 若画面调整乱了调不回来，点击上方「还原浮窗设置」，浮窗位置/形状/画面与绑定视角将全部恢复默认。"/>
+            android:text="使用说明：\n1. 触发逻辑：\n打转向灯：左灯出左画面，右灯出右画面。\nBSD 预警：旁车进盲区时自动弹对应侧，车走了自动收。\n优先级：系统影像>打灯影像>BSD预警\n2. 浮窗逻辑：\n优先窗：单侧触发时都在优先窗显示。\n次级窗：双侧触发时，后触发侧在次级窗显示。\n两侧同一瞬间发生 → 默认左边进优先窗。\n优先窗侧先结束触发、另一侧还在 → 剩下那侧自动升到优先窗。\n3.基本权限开启：\n「悬浮窗权限：未授予」→ 允许显示在其他应用上层\n「相机权限：未授予」→ 允许\n4. 功能设置：\n顶部「浮窗总开关」点击开启。首次点击车机弹 ADB 配对确认，应用会自己重启一次，重进即可。\n打灯辅助影像：默认开启。\nBSD盲区提醒设置：\n「BSD自动弹窗」→ 开启后，后车盲区提醒亮起时，会弹出对应侧影像画面。\nBSD其余开关根据需求开启。\n5. 浮窗编辑：\n优先、次级浮窗位置设置条目下，点「左状态」：\na.位置调节：单指拖动弹出的两扇编辑窗，拖到位松手就保存；\nb.浮窗内画面调节：双击浮窗，标题变成「编辑中」后，单指平移、双指缩放画面，拖浮窗黄色边缘改形状，再双击保存；\nc.再次点击软件页面的“左状态”，保存退出。\n右侧画面单独调就点「右状态」重复第 b-c 步。位置调节左右共用，摆一次就够；画面左右各记一套。\n「一键同步大小」：次级窗大小对齐优先窗。\n「复位浮窗位置」：设置出问题时可归回默认状态。"/>
+
+        <!-- v1.67 beta3：主窗更新探针记录（只在异常/恢复时各记一条，最多 12 条） -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_panel"
+            android:padding="12dp"
+            android:layout_marginTop="12dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="主窗更新探针"
+                    android:textColor="@color/accent_gold"
+                    android:textSize="17sp"
+                    android:textStyle="bold"/>
+
+                <Button
+                    android:id="@+id/btn_clear_probe"
+                    android:layout_width="wrap_content"
+                    android:layout_height="50dp"
+                    android:background="@drawable/bg_button"
+                    android:textColor="@color/text_white"
+                    android:text="清空探针"
+                    android:textSize="15sp"/>
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tv_probe"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:fontFamily="monospace"
+                android:textColor="@color/text_white"
+                android:textSize="13sp"
+                android:lineSpacingExtra="3dp"
+                android:text="暂无记录（主窗 5 秒不出新帧时才会写入）"/>
+        </LinearLayout>
 
         <!-- v1.41：状态日志标题行 + 清空日志按钮 -->
         <LinearLayout

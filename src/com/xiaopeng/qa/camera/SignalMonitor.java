@@ -170,8 +170,9 @@ public final class SignalMonitor {
                 }
                 // v1.48：抑制优先级 —— R 档 > 双闪 > 正常单边亮起。
                 // R 档（倒车）绝不召唤打灯浮窗、不介入 AVM 视角，避免覆盖倒车影像；
-                // 双闪（左右同时亮）是危险警告灯，同样不触发打灯变道浮窗。
-                // 若进入 R 档/双闪前浮窗正显示（行车打灯途中挂倒挡、单边亮起转双闪），立即收起。
+                // v1.65 beta1：双闪不再在检测层硬抑制，改为统一上报 "BOTH"，
+                // 由服务按「双闪联动」开关决定是双侧出图（开）还是收起/不显示（关）。
+                // 若进入 R 档前浮窗正显示（行车打灯途中挂倒挡），立即收起。
                 boolean leftEdgeOn = left && !prevLeft;
                 boolean rightEdgeOn = right && !prevRight;
                 boolean any = left || right;
@@ -185,11 +186,26 @@ public final class SignalMonitor {
                     }
                     offSinceMs = -1;
                 } else if (hazard) {
-                    if (!prevHazard && prevAny) {
-                        Log.i(TAG, "双闪检测：不触发打灯浮窗并收起 L=" + left + " R=" + right);
-                        listener.onSignalChanged(null, false);
+                    // v1.65 beta1：双闪开始边沿上报 BOTH（电平式，后续轮次不重复上报）
+                    if (!prevHazard) {
+                        Log.i(TAG, "双闪检测：上报 BOTH，是否双侧出图由开关决定 L=" + left + " R=" + right);
+                        listener.onSignalChanged("BOTH", true);
                     }
                     offSinceMs = -1;
+                } else if (prevHazard) {
+                    // v1.65 beta1：双闪退出。可能转为单侧持续亮（关双闪但转向灯仍打），
+                    // 需按当前电平重投一次，否则已置位的另一侧电平会残留；
+                    // 若双灯全灭，只置熄灭计时起点，交给下一轮去抖判定收起。
+                    if (left) {
+                        Log.i(TAG, "双闪退出转为左灯持续亮，重投 LEFT");
+                        listener.onSignalChanged("LEFT", true);
+                    } else if (right) {
+                        Log.i(TAG, "双闪退出转为右灯持续亮，重投 RIGHT");
+                        listener.onSignalChanged("RIGHT", true);
+                    } else {
+                        Log.i(TAG, "双闪退出且双灯全灭，进入熄灭去抖");
+                        offSinceMs = System.currentTimeMillis();
+                    }
                 } else if (leftEdgeOn || rightEdgeOn) {
                     // 方向即时切换：亮起方向即回调方向，MainActivity 据此切对应方向浮窗
                     String dir = leftEdgeOn ? "LEFT" : "RIGHT";

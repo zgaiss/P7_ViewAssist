@@ -43,31 +43,42 @@ public class MainActivity extends Activity implements View.OnClickListener {
     // v1.33：日志区滚动窗口，最多保留最近 500 行
     private static final int MAX_LOG_LINES = 500;
 
+    // v1.61：调试页隐藏入口——连点主界面「默认开启」按钮 N 次才进入双路镜头预览页
+    private static final int CAMERA_TEST_CLICK_TARGET = 10;
+    private static final long CAMERA_TEST_CLICK_INTERVAL_MS = 1500L;
+    private int cameraTestClickCount = 0;
+    private long cameraTestLastClickMs = 0L;
+
     private Button btnOverlay;
     private Button btnCamera;
     private Button btnCameraTest;
+    // v1.65 beta1：双闪联动影像开关（开启后打双闪同时出左右两侧影像，便于测试双窗）
+    private Button btnHazardDual;
     private EditText etHost;
     private EditText etPort;
     private Button swEnable;
     // v1.41：一键还原左右转向浮窗默认
-    private Button btnResetOverlay;
+    private Button btnSlotLeft;
+    private Button btnSlotRight;
+    private Button btnSlotSyncSize;
+    private Button btnSlotReset;
     // v1.46：右浮窗对齐左浮窗（位置/大小/形状）
-    private Button btnAlignRightToLeft;
     // v1.52：BSD 提醒开关
     private Button btnBsd;
     // v1.53 beta2：BSD 无车常显调试开关（无车也显示窄条，方便拖动调位置/测试）
     private Button btnBsdAlways;
     // v1.54：BSD 预警自动弹窗开关 / BSD 常显位置一键复位
     private Button btnBsdAutoOverlay;
-    private Button btnBsdResetPos;
     // v1.54 beta3：BSD 预警红色遮罩开关
     private Button btnBsdRedOverlay;
     // v1.54 beta4：预警浮窗自定义编辑（召唤左右预警窗编辑/关闭保存）/ 预警浮窗同步转向灯浮窗
-    private Button btnBsdEdit;
-    private Button btnBsdSync;
     private Button btnClearLog;
     private TextView tvState;
     private TextView tvLog;
+    /** v1.67 beta3：主窗更新探针面板。 */
+    private TextView tvProbe;
+    private Button btnClearProbe;
+    private String lastProbeText = "";
     private ScrollView scrollLog;
     // v1.57 beta2：开源声明区与关于按钮
     private TextView tvOpenSource;
@@ -91,6 +102,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
             for (String line : CameraOverlayService.drainLogs()) {
                 appendLog(line);
             }
+            refreshProbePanel();
             logPoller.postDelayed(this, 1000);
         }
     };
@@ -104,21 +116,25 @@ public class MainActivity extends Activity implements View.OnClickListener {
         btnOverlay = findViewById(R.id.btn_overlay);
         btnCamera = findViewById(R.id.btn_camera);
         btnCameraTest = findViewById(R.id.btn_camera_test);
+        btnHazardDual = findViewById(R.id.btn_hazard_dual);
         etHost = findViewById(R.id.et_host);
         etPort = findViewById(R.id.et_port);
         swEnable = findViewById(R.id.sw_enable);
-        btnResetOverlay = findViewById(R.id.btn_reset_overlay);
-        btnAlignRightToLeft = findViewById(R.id.btn_align_right_to_left);
+        btnSlotLeft = findViewById(R.id.btn_slot_left);
+        btnSlotRight = findViewById(R.id.btn_slot_right);
         btnBsd = findViewById(R.id.btn_bsd);
         btnBsdAlways = findViewById(R.id.btn_bsd_always);
         btnBsdAutoOverlay = findViewById(R.id.btn_bsd_auto_overlay);
-        btnBsdResetPos = findViewById(R.id.btn_bsd_reset_pos);
         btnBsdRedOverlay = findViewById(R.id.btn_bsd_red_overlay);
-        btnBsdEdit = findViewById(R.id.btn_bsd_edit);
-        btnBsdSync = findViewById(R.id.btn_bsd_sync);
+        btnSlotSyncSize = findViewById(R.id.btn_slot_sync_size);
+        btnSlotReset = findViewById(R.id.btn_slot_reset);
         btnClearLog = findViewById(R.id.btn_clear_log);
         tvState = findViewById(R.id.tv_state);
         tvLog = findViewById(R.id.tv_log);
+        tvProbe = findViewById(R.id.tv_probe);
+        btnClearProbe = findViewById(R.id.btn_clear_probe);
+        if (btnClearProbe != null) btnClearProbe.setOnClickListener(this);
+        refreshProbePanel();
         tvOpenSource = findViewById(R.id.tv_open_source);
         tvRepoLink = findViewById(R.id.tv_repo_link);
         btnAbout = findViewById(R.id.btn_about);
@@ -127,15 +143,15 @@ public class MainActivity extends Activity implements View.OnClickListener {
         btnOverlay.setOnClickListener(this);
         btnCamera.setOnClickListener(this);
         btnCameraTest.setOnClickListener(this);
-        btnResetOverlay.setOnClickListener(this);
-        btnAlignRightToLeft.setOnClickListener(this);
+        btnHazardDual.setOnClickListener(this);
+        btnSlotLeft.setOnClickListener(this);
+        btnSlotRight.setOnClickListener(this);
         btnBsd.setOnClickListener(this);
         btnBsdAlways.setOnClickListener(this);
         btnBsdAutoOverlay.setOnClickListener(this);
-        btnBsdResetPos.setOnClickListener(this);
         btnBsdRedOverlay.setOnClickListener(this);
-        btnBsdEdit.setOnClickListener(this);
-        btnBsdSync.setOnClickListener(this);
+        btnSlotSyncSize.setOnClickListener(this);
+        btnSlotReset.setOnClickListener(this);
         btnClearLog.setOnClickListener(this);
         tvRepoLink.setOnClickListener(this);
         btnAbout.setOnClickListener(this);
@@ -148,7 +164,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
         updateConfigButtons();
 
         // 启动日志显示版本号，便于手机端直接核对安装版本
-        appendLog("CameraAssist v1.57 启动（versionCode=57）");
+        appendLog("CameraAssist v1.67_beta5 启动（versionCode=79）");
 
         // v1.57 beta2：启动即校验 APK 签名指纹，非官方签名仅警告不阻断
         checkSignature();
@@ -181,9 +197,36 @@ public class MainActivity extends Activity implements View.OnClickListener {
     public void onClick(View v) {
         int id = v.getId();
         if (id == R.id.btn_camera_test) {
-            // v1.56 beta2：摄像头预览与镜头设置改为直接入口（移除 v1.44 连点 10 次限制）
-            Toast.makeText(this, "进入摄像头预览与镜头设置", Toast.LENGTH_SHORT).show();
-            startActivity(new Intent(this, CameraTestActivity.class));
+            // v1.61：单次点击仅提示"打灯辅助已开启"；1.5s 内连点 10 次才进入双路镜头预览页（隐藏调试入口）
+            long now = System.currentTimeMillis();
+            if (now - cameraTestLastClickMs > CAMERA_TEST_CLICK_INTERVAL_MS) {
+                cameraTestClickCount = 0;
+            }
+            cameraTestLastClickMs = now;
+            cameraTestClickCount++;
+            if (cameraTestClickCount >= CAMERA_TEST_CLICK_TARGET) {
+                cameraTestClickCount = 0;
+                appendLog("调试入口已触发：进入双路摄像头预览");
+                startActivity(new Intent(this, CameraTestActivity.class));
+            } else if (cameraTestClickCount >= CAMERA_TEST_CLICK_TARGET - 2) {
+                Toast.makeText(this, "打灯辅助已开启（再点 "
+                        + (CAMERA_TEST_CLICK_TARGET - cameraTestClickCount) + " 次进入调试页）",
+                        Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "打灯辅助已开启", Toast.LENGTH_SHORT).show();
+            }
+        } else if (id == R.id.btn_hazard_dual) {
+            // v1.65 beta1：双闪联动影像开关（默认关；开启后双闪同时触发左右两侧影像，便于测双窗）
+            boolean on = !prefs.getBoolean("hazard_dual_enabled", false);
+            CameraOverlayService.setHazardDualEnabled(this, on);
+            if (on) {
+                appendLog("双闪联动影像：开启（打双闪时优先窗出左侧、次级窗出右侧）");
+                Toast.makeText(this, "双闪联动已开启：打双闪即出左右两窗", Toast.LENGTH_LONG).show();
+            } else {
+                appendLog("双闪联动影像：关闭（打双闪不再显示影像）");
+                Toast.makeText(this, "双闪联动已关闭：打双闪不显示影像", Toast.LENGTH_SHORT).show();
+            }
+            updateConfigButtons();
         } else if (id == R.id.btn_overlay) {
             if (hasOverlay()) {
                 Toast.makeText(this, "悬浮窗权限已授予", Toast.LENGTH_SHORT).show();
@@ -205,17 +248,16 @@ public class MainActivity extends Activity implements View.OnClickListener {
             } else {
                 enableLink();
             }
-        } else if (id == R.id.btn_reset_overlay) {
-            // v1.33：一键还原左右转向浮窗位置/形状/画面缩放到默认，浮窗显示中立即按默认刷新
-            CameraOverlayService.resetOverlayDefaults(this);
-            appendLog("已请求还原左右浮窗默认（位置/形状/画面）");
-            Toast.makeText(this, "已还原浮窗默认", Toast.LENGTH_SHORT).show();
-        } else if (id == R.id.btn_align_right_to_left) {
-            // v1.46：右浮窗对齐左浮窗（位置/大小/形状），立即生效并落盘；
-            // v1.54 beta4：按钮改名为「右转向灯浮窗同步左转向灯浮窗」
-            CameraOverlayService.alignRightToLeft(this);
-            appendLog("已请求右转向灯浮窗同步左转向灯浮窗（位置/大小/形状）");
-            Toast.makeText(this, "右转向灯浮窗已同步左转向灯浮窗", Toast.LENGTH_SHORT).show();
+        } else if (id == R.id.btn_slot_left) {
+            // v1.58：进入左状态浮窗编辑——同时弹出优先窗 P 与次级窗 S
+            CameraOverlayService.editSlotLayout(this, "LEFT");
+            appendLog("已请求进入左状态浮窗编辑（P/S 两窗同时可拖拽/缩放，点 ✕ 保存退出）");
+            Toast.makeText(this, "左状态：拖动改位置，拖边改大小，双指缩放画面", Toast.LENGTH_LONG).show();
+        } else if (id == R.id.btn_slot_right) {
+            // v1.58：进入右状态浮窗编辑（窗口位置沿用左状态，仅改画面）
+            CameraOverlayService.editSlotLayout(this, "RIGHT");
+            appendLog("已请求进入右状态浮窗编辑（两窗画面按右状态落盘，几何沿用左状态）");
+            Toast.makeText(this, "右状态：拖动改位置，拖边改大小，双指缩放画面", Toast.LENGTH_LONG).show();
         } else if (id == R.id.btn_bsd) {
             // v1.52：BSD 盲区提醒开关（联动运行时挂载/摘除窄条）
             boolean on = !prefs.getBoolean("bsd_warning_enabled", false);
@@ -243,11 +285,6 @@ public class MainActivity extends Activity implements View.OnClickListener {
                     prefs.getBoolean("bsd_red_overlay", true));
             appendLog("BSD 自动弹窗：" + (on ? "开启" : "关闭") + "（BSD 预警边沿自动弹对应侧摄像头浮窗，最低优先级）");
             updateConfigButtons();
-        } else if (id == R.id.btn_bsd_reset_pos) {
-            // v1.54：BSD 常显窄条位置一键复位（bsd_left_x/y、bsd_right_x/y 恢复默认）
-            CameraOverlayService.resetBsdPositions(this);
-            appendLog("已请求 BSD 常显窄条位置一键复位（默认 x=8dp, y=90dp）");
-            Toast.makeText(this, "BSD 窄条位置已复位", Toast.LENGTH_SHORT).show();
         } else if (id == R.id.btn_bsd_red_overlay) {
             // v1.54 beta3：BSD 预警红色遮罩开关（默认开；关闭后预警弹窗不再显示红色边界遮罩/呼吸动画）
             boolean on = !prefs.getBoolean("bsd_red_overlay", true);
@@ -257,22 +294,26 @@ public class MainActivity extends Activity implements View.OnClickListener {
                     prefs.getBoolean("bsd_auto_overlay", true), on);
             appendLog("BSD 红色遮罩：" + (on ? "开启" : "关闭") + "（预警弹窗边界红色警示呼吸圈）");
             updateConfigButtons();
-        } else if (id == R.id.btn_bsd_edit) {
-            // v1.54 beta4：编辑预警浮窗——召唤左右预警浮窗进入可编辑状态；
-            // 再次点击同时关闭并保存两侧配置
-            CameraOverlayService.editBsdWarning(this);
-            appendLog("已请求编辑预警浮窗（左右预警窗可分别拖动/双击编辑，再次点击关闭并保存）");
-            Toast.makeText(this, "编辑预警浮窗：召唤/关闭预警窗编辑", Toast.LENGTH_SHORT).show();
-        } else if (id == R.id.btn_bsd_sync) {
-            // v1.54 beta4：预警浮窗同步转向灯浮窗（左对左、右对右：位置/大小/画面）
-            CameraOverlayService.syncBsdToTurn(this);
-            appendLog("已请求预警浮窗同步转向灯浮窗（左对左/右对右：位置/大小/画面）");
-            Toast.makeText(this, "预警浮窗已同步转向灯浮窗", Toast.LENGTH_SHORT).show();
+        } else if (id == R.id.btn_slot_sync_size) {
+            // v1.58：次级窗 S 宽高套用优先窗 P，各自位置保持不变
+            CameraOverlayService.syncSlotSize(this);
+            appendLog("已请求一键同步大小（次级窗 S 宽高跟随优先窗 P）");
+            Toast.makeText(this, "次级窗大小已同步为优先窗", Toast.LENGTH_SHORT).show();
+        } else if (id == R.id.btn_slot_reset) {
+            // v1.58：两窗位置/大小与四套画面配置复位为默认
+            CameraOverlayService.resetSlotGeometry(this);
+            appendLog("已请求复位浮窗位置/大小/画面为默认");
+            Toast.makeText(this, "浮窗位置/大小/画面已复位", Toast.LENGTH_SHORT).show();
         } else if (id == R.id.btn_clear_log) {
             // v1.41：清空日志显示区与内存日志
             tvLog.setText("");
             CameraOverlayService.clearLogs();
             appendLog("日志已清空");
+        } else if (id == R.id.btn_clear_probe) {
+            // v1.67 beta3：清空主窗更新探针记录
+            CameraOverlayService.clearProbeRecords();
+            lastProbeText = "";
+            refreshProbePanel();
         } else if (id == R.id.btn_about) {
             // v1.57 beta2：关于弹窗（版本/作者/仓库/LICENSE 摘要/防倒卖提示）
             showAboutDialog();
@@ -309,6 +350,13 @@ public class MainActivity extends Activity implements View.OnClickListener {
      * v1.54 beta4：焦点抑制已停用，不再刷新对应按钮。 */
     private void updateConfigButtons() {
         if (btnBsd == null) return;
+        // v1.65 beta1：双闪联动影像开关（默认关）
+        if (btnHazardDual != null) {
+            boolean hazardDual = prefs.getBoolean("hazard_dual_enabled", false);
+            btnHazardDual.setBackgroundResource(hazardDual ? R.drawable.bg_button_active : R.drawable.bg_button);
+            btnHazardDual.setTextColor(hazardDual ? 0xFFFFD98A : 0xFFFFFFFF);
+            btnHazardDual.setText(hazardDual ? "双闪联动影像：开启" : "双闪联动影像：关闭");
+        }
         boolean bsd = prefs.getBoolean("bsd_warning_enabled", false);
         boolean bsdAlways = prefs.getBoolean("bsd_show_always", false);
         boolean bsdAuto = prefs.getBoolean("bsd_auto_overlay", true);
@@ -466,6 +514,18 @@ public class MainActivity extends Activity implements View.OnClickListener {
         swEnable.setText(linkOn ? "浮窗总开关：开启" : "浮窗总开关：关闭");
     }
 
+    /** v1.67 beta3：刷新「主窗更新探针」面板。内容有变化才写，避免每秒重排。 */
+    private void refreshProbePanel() {
+        if (tvProbe == null) return;
+        // v1.67 beta4：面板每秒刷新时兜底确认探针在跑——服务活着但探针沉默会自动重启，
+        // 杜绝「主窗卡住、面板却一条记录都没有」的静默失败。
+        CameraOverlayService.ensureProbeRunning();
+        String text = CameraOverlayService.getProbeText();
+        if (text.equals(lastProbeText)) return;
+        lastProbeText = text;
+        tvProbe.setText(text);
+    }
+
     private void appendLog(String line) {
         String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
         String text = tvLog.getText().toString();
@@ -535,7 +595,7 @@ public class MainActivity extends Activity implements View.OnClickListener {
         panel.addView(tvApp);
 
         TextView tvMeta = new TextView(this);
-        tvMeta.setText("版本：1.57\n作者：Hades-Heyds");
+        tvMeta.setText("版本：1.67_beta5\n作者：Hades-Heyds");
         tvMeta.setTextSize(15);
         tvMeta.setTextColor(0xFFFFFFFF);
         tvMeta.setLineSpacing(0, 1.1f);
