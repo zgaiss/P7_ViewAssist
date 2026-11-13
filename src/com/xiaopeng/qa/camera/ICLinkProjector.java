@@ -12,6 +12,7 @@ import java.net.Socket;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CountDownLatch;
 
 /**
  * v1.57 beta3：仪表 H.264 投影模块（ICLinkProjector）。
@@ -45,135 +46,145 @@ public class ICLinkProjector {
     private static final int QUEUE_CAPACITY = 8;
     private static final long SEND_POLL_MS = 200L;
 
-    private final AtomicBoolean running = new AtomicBoolean(false);
+    /** The owner must ban new producers before acknowledging real producer detachment. */
+    public interface ProducerReleaseGate {
+        void retire(Surface surface, Runnable producersDetached);
+    }
+
     private final Object lock = new Object();
-    private final ArrayBlockingQueue<byte[]> frameQueue = new ArrayBlockingQueue<>(QUEUE_CAPACITY);
+    private final ProducerReleaseGate releaseGate;
+    private final Runnable onReady;
+    private Session current;
 
-    private MediaCodec codec;
-    private Surface inputSurface;
-    private Socket socket;
-    private OutputStream out;
-    private Thread pushThread;
-    private Thread sendThread;
+    private static final class Session {
+        final EncoderRetirement retirement;
+        final AtomicBoolean running = new AtomicBoolean(false);
+        final CountDownLatch detached = new CountDownLatch(1);
+        final ArrayBlockingQueue<byte[]> frameQueue = new ArrayBlockingQueue<>(QUEUE_CAPACITY);
+        MediaCodec codec;
+        Surface inputSurface;
+        Socket socket;
+        OutputStream out;
+        Thread initThread;
+        Thread pushThread;
+        Thread sendThread;
+        Session(EncoderRetirement retirement) { this.retirement = retirement; }
+    }
 
-    /** 返回编码器 input Surface，供 Camera2 预览会话追加（编码器未就绪时返回 null）。 */
+    public ICLinkProjector(ProducerReleaseGate releaseGate, Runnable onReady) {
+        this.releaseGate = releaseGate;
+        this.onReady = onReady;
+    }
+
+    public ICLinkProjector(ProducerReleaseGate releaseGate) { this(releaseGate, null); }
+
+    public static boolean areAllResourcesReleased() { return EncoderRetirement.isFree(); }
+
+    /** Without an owner handshake, published surfaces are deliberately retained on stop. */
+    public ICLinkProjector() { this(null); }
+
     public Surface getInputSurface() {
         synchronized (lock) {
-            return inputSurface;
+            if (current == null || !current.running.get() || !current.retirement.publish()) return null;
+            return current.inputSurface;
         }
     }
 
     public boolean isRunning() {
-        return running.get();
+        synchronized (lock) { return current != null && current.running.get(); }
     }
 
-    /**
-     * 启动投影：同步创建 H.264 编码器 + input Surface（耗时短），
-     * socket 连接在后台推流线程内异步完成（失败静默降级，不阻塞调用方）。
-     * 幂等：已启动时直接返回。
-     */
+    /** One process-admitted init worker; native driver calls never hold the status lock. */
     public void start(String host, int port) {
+        Session failed = null;
         synchronized (lock) {
-            if (running.get()) {
-                return;
-            }
+            if (current != null) return;
+            EncoderRetirement admission = EncoderRetirement.acquire();
+            if (admission == null) return;
+            Session run = new Session(admission);
+            admission.retainOwner(run);
+            current = run;
             try {
-                MediaCodec c = MediaCodec.createEncoderByType("video/avc");
-                MediaFormat fmt = MediaFormat.createVideoFormat("video/avc", ENC_WIDTH, ENC_HEIGHT);
-                fmt.setInteger(MediaFormat.KEY_BIT_RATE, ENC_BIT_RATE);
-                fmt.setInteger(MediaFormat.KEY_FRAME_RATE, ENC_FRAME_RATE);
-                fmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, ENC_I_FRAME_INTERVAL);
-                fmt.setInteger(MediaFormat.KEY_COLOR_FORMAT,
-                        MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-                c.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-                Surface s = c.createInputSurface();
-                c.start();
-
-                Socket sk = new Socket();
-                codec = c;
-                inputSurface = s;
-                socket = sk;
-                out = null;
-                running.set(true);
-
-                pushThread = new Thread(() -> pushLoop(), "icl-push");
-                sendThread = new Thread(() -> sendLoop(host, port), "icl-send");
-                pushThread.start();
-                sendThread.start();
-                Log.i(TAG, "ICLinkProjector started: " + host + ":" + port
-                        + " enc=" + ENC_WIDTH + "x" + ENC_HEIGHT + "@" + ENC_FRAME_RATE + "fps");
+                run.initThread = new Thread(() -> initialize(run, host, port), "icl-init");
+                run.initThread.start();
             } catch (Throwable t) {
-                // 编码器创建失败：静默降级，绝不 crash
-                Log.w(TAG, "start failed, silent fallback: " + t.getMessage());
-                releaseInternal();
+                failed = run;
             }
+        }
+        if (failed != null) releaseInternal(failed);
+    }
+
+    private void initialize(Session run, String host, int port) {
+        boolean ready = false;
+        try {
+            // Record each acquisition immediately so partial initialization cannot leak it.
+            run.codec = MediaCodec.createEncoderByType("video/avc");
+            MediaFormat fmt = MediaFormat.createVideoFormat("video/avc", ENC_WIDTH, ENC_HEIGHT);
+            fmt.setInteger(MediaFormat.KEY_BIT_RATE, ENC_BIT_RATE);
+            fmt.setInteger(MediaFormat.KEY_FRAME_RATE, ENC_FRAME_RATE);
+            fmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, ENC_I_FRAME_INTERVAL);
+            fmt.setInteger(MediaFormat.KEY_COLOR_FORMAT,
+                    MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+            run.codec.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            run.inputSurface = run.codec.createInputSurface();
+            run.codec.start();
+            run.socket = new Socket();
+            synchronized (lock) {
+                if (!run.retirement.initialized()) return; // Stop won; never publish late init.
+                run.running.set(true);
+                run.pushThread = new Thread(() -> {
+                    try { pushLoop(run); } finally { releaseInternal(run); }
+                }, "icl-push");
+                run.sendThread = new Thread(() -> {
+                    try { sendLoop(run, host, port); } finally { releaseInternal(run); }
+                }, "icl-send");
+                run.pushThread.start();
+                run.sendThread.start();
+                ready = true;
+            }
+            Log.i(TAG, "ICLinkProjector started: " + host + ":" + port
+                    + " enc=" + ENC_WIDTH + "x" + ENC_HEIGHT + "@" + ENC_FRAME_RATE + "fps");
+            // Notification only; receiver must re-read current state on its own actor.
+            if (onReady != null && run.running.get()) onReady.run();
+        } catch (Throwable t) {
+            ready = false;
+            Log.w(TAG, "start failed, silent fallback: " + t.getMessage());
+        } finally {
+            if (!ready) releaseInternal(run);
         }
     }
 
-    /**
-     * 停止投影（幂等，可重复调用）：停止推流线程、释放编码器、关闭 socket。
-     * 多次打灯循环（弹窗→收窗→再弹）不得泄漏编码器/socket/线程；
-     * stop 后再次 show 可重新启动。
-     */
+    /** Asynchronous stop. No UI/camera actor joins, and no timeout masquerades as detachment. */
     public void stop() {
-        Thread p;
-        Thread s;
-        synchronized (lock) {
-            if (!running.get()) {
-                return;
-            }
-            running.set(false);
-            p = pushThread;
-            s = sendThread;
-            frameQueue.clear();
-            // 关闭 socket 以唤醒 sendLoop 可能的写阻塞 / connect 阻塞
-            try {
-                if (socket != null) {
-                    socket.close();
-                }
-            } catch (Throwable ignored) {
-            }
-        }
-        if (p != null) {
-            try {
-                p.join(1500);
-            } catch (InterruptedException ignored) {
-            }
-        }
-        if (s != null) {
-            try {
-                s.join(1500);
-            } catch (InterruptedException ignored) {
-            }
-        }
-        releaseInternal();
-        Log.i(TAG, "ICLinkProjector stopped");
+        Session run;
+        synchronized (lock) { run = current; }
+        if (run != null) releaseInternal(run);
     }
 
     /** 编码输出循环：dequeue 编码帧，SPS/PPS 缓存并在关键帧前补发，帧数据入队（防背压）。 */
-    private void pushLoop() {
+    private void pushLoop(Session run) {
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
         byte[] config = null;
-        while (running.get()) {
+        while (run.running.get()) {
             try {
-                int idx = codec.dequeueOutputBuffer(info, DEQUEUE_TIMEOUT_US);
+                int idx = run.codec.dequeueOutputBuffer(info, DEQUEUE_TIMEOUT_US);
                 if (idx < 0) {
                     continue;
                 }
                 boolean isConfig = (info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0;
                 boolean isKey = (info.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0;
                 byte[] data = new byte[info.size];
-                codec.getOutputBuffer(idx).get(data, 0, info.size);
-                codec.releaseOutputBuffer(idx, false);
+                run.codec.getOutputBuffer(idx).get(data, 0, info.size);
+                run.codec.releaseOutputBuffer(idx, false);
                 if (isConfig) {
                     // SPS/PPS：缓存，待下一个关键帧前补发（解码器必须先收到 SPS/PPS 才能解 IDR）
                     config = data;
                     continue;
                 }
                 if (isKey && config != null) {
-                    enqueue(config);
+                    enqueue(run, config);
                 }
-                enqueue(data);
+                enqueue(run, data);
                 if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                     break;
                 }
@@ -185,29 +196,29 @@ public class ICLinkProjector {
     }
 
     /** 入队：队列满则丢最旧帧保最新（防背压，发送慢时不阻塞编码线程）。 */
-    private void enqueue(byte[] data) {
-        if (!frameQueue.offer(data)) {
-            frameQueue.poll();
-            frameQueue.offer(data);
+    private void enqueue(Session run, byte[] data) {
+        if (!run.frameQueue.offer(data)) {
+            run.frameQueue.poll();
+            run.frameQueue.offer(data);
         }
     }
 
     /** 发送循环：后台连接仪表，随后取帧封装 4 字节大端长度头 + Annex-B ES 写 socket。 */
-    private void sendLoop(String host, int port) {
+    private void sendLoop(Session run, String host, int port) {
         try {
-            socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
-            socket.setTcpNoDelay(true);
-            out = socket.getOutputStream();
+            run.socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
+            run.socket.setTcpNoDelay(true);
+            run.out = run.socket.getOutputStream();
             Log.i(TAG, "ICLinkProjector connected: " + host + ":" + port);
         } catch (Throwable t) {
-            // 连接失败：静默降级（编码器继续工作，帧被丢弃），不影响浮窗
+            // 连接失败：由 finally 统一退休，等待 producer 真正脱离后释放编码器
             Log.w(TAG, "connect failed, projection drops: " + t.getMessage());
             return;
         }
         byte[] head = new byte[4];
-        while (running.get()) {
+        while (run.running.get()) {
             try {
-                byte[] frame = frameQueue.poll(SEND_POLL_MS, TimeUnit.MILLISECONDS);
+                byte[] frame = run.frameQueue.poll(SEND_POLL_MS, TimeUnit.MILLISECONDS);
                 if (frame == null) {
                     continue;
                 }
@@ -216,9 +227,9 @@ public class ICLinkProjector {
                 head[1] = (byte) ((len >>> 16) & 0xFF);
                 head[2] = (byte) ((len >>> 8) & 0xFF);
                 head[3] = (byte) (len & 0xFF);
-                out.write(head);
-                out.write(frame);
-                out.flush();
+                run.out.write(head);
+                run.out.write(frame);
+                run.out.flush();
             } catch (Throwable t) {
                 // 推流中 IO 异常：静默降级
                 Log.w(TAG, "send loop error, silent: " + t.getMessage());
@@ -227,36 +238,74 @@ public class ICLinkProjector {
         }
     }
 
-    /** 释放编码器 / input Surface / socket（幂等）。 */
-    private void releaseInternal() {
+    /** All callers, including failed initialization and worker errors, use this barrier. */
+    private void releaseInternal(Session run) {
+        synchronized (lock) {
+            if (!run.retirement.retire()) return;
+            run.running.set(false);
+            run.frameQueue.clear();
+        }
+        Runnable detached = () -> {
+            run.retirement.producerDetached();
+            run.detached.countDown();
+        };
+        if (!run.retirement.needsProducerBarrier()) {
+            detached.run();
+        } else if (releaseGate != null) {
+            try { releaseGate.retire(run.inputSurface, detached); }
+            catch (Throwable t) { Log.w(TAG, "producer retirement failed; retaining encoder", t); }
+        } else {
+            Log.w(TAG, "no producer release gate; retaining published encoder");
+        }
+        // One process encoder admission also bounds this worker if a driver never returns.
         try {
-            if (codec != null) {
-                codec.stop();
-            }
-        } catch (Throwable ignored) {
+            Thread cleanup = new Thread(() -> finishRetirement(run), "icl-retire");
+            cleanup.start();
+        } catch (Throwable t) {
+            Log.w(TAG, "retirement worker failed; retaining encoder", t);
+        }
+    }
+
+    private void finishRetirement(Session run) {
+        try {
+            // No resource reads/cleanup race a blocked or partially completed initializer.
+            if (run.initThread != null) run.initThread.join();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return;
         }
         try {
-            if (codec != null) {
-                codec.release();
-            }
-        } catch (Throwable ignored) {
+            if (run.socket != null) run.socket.close();
+        } catch (Throwable t) {
+            Log.w(TAG, "socket close failed", t);
         }
-        codec = null;
         try {
-            if (inputSurface != null) {
-                inputSurface.release();
-            }
-        } catch (Throwable ignored) {
+            run.detached.await();
+            // Worker exit, not a timed join, protects codec from in-flight dequeue calls.
+            if (run.pushThread != null) run.pushThread.join();
+            if (run.sendThread != null) run.sendThread.join();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            Log.w(TAG, "retirement interrupted; retaining encoder");
+            return;
         }
-        inputSurface = null;
-        try {
-            if (socket != null) {
-                socket.close();
-            }
-        } catch (Throwable ignored) {
+        if (!run.retirement.claimCleanup(true, true)) return;
+        boolean released = true;
+        if (run.codec != null) {
+            try { run.codec.stop(); } catch (Throwable ignored) { /* May not have started. */ }
+            try { run.codec.release(); }
+            catch (Throwable t) { released = false; Log.w(TAG, "codec release uncertain", t); }
         }
-        socket = null;
-        out = null;
-        frameQueue.clear();
+        if (run.inputSurface != null) {
+            try { run.inputSurface.release(); }
+            catch (Throwable t) { released = false; Log.w(TAG, "surface release uncertain", t); }
+        }
+        if (!released) return; // Quarantined: never silently allow replacement allocation.
+        run.frameQueue.clear();
+        synchronized (lock) {
+            if (current == run) current = null;
+            run.retirement.nativeReleasedByCurrentWorker();
+        }
+        Log.i(TAG, "ICLinkProjector stopped after producer and worker retirement");
     }
 }

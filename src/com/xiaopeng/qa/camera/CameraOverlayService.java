@@ -124,7 +124,17 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
     private int bufferH = BUFFER_H;
 
     // ---- v1.57 beta3：仪表 H.264 投影（ICLinkProjector）----
-    private final ICLinkProjector icProjector = new ICLinkProjector();
+    private final ICLinkProjector icProjector = new ICLinkProjector(
+            new ICLinkProjector.ProducerReleaseGate() {
+                @Override public void retire(Surface surface, Runnable detached) {
+                    // Camera sessions only target relay input, never the encoder Surface.
+                    GlCameraRelay.retireBorrowedSurface(surface, detached);
+                    refreshRelayOutputs();
+                }
+            }, new Runnable() { @Override public void run() {
+                // Projector initialization is asynchronous; publish its newly ready borrowed target.
+                refreshRelayOutputs();
+            }});
     private boolean iclProjectionEnabled = true;
     private String iclIp = ICLinkProjector.DEFAULT_HOST;
     private int iclPort = ICLinkProjector.DEFAULT_PORT;
@@ -154,17 +164,14 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
 
     private CameraManager cameraManager;
     private String cameraId;
-    private CameraDevice cameraDevice;
-    private CameraCaptureSession captureSession;
+    private volatile String[] availableCameraIds = new String[0];
+    private volatile CameraDevice cameraDevice;
+    private volatile CameraCaptureSession captureSession;
     private HandlerThread bgThread;
     private Handler bgHandler;
-    // ---- v1.62：GL 一进多出中转（根治双窗多 target 会话失败）----
+    // ---- Camera has one relay input; output failures are isolated and resource-bounded. ----
     /** 相机唯一输出面 + 多窗口分发；null 表示尚未创建。 */
-    private GlCameraRelay glRelay = null;
-    /** 是否启用 GL 中转；初始化失败自动置 false 并回退直连相机。 */
-    private boolean glRelayMode = true;
-    /** v1.63：GL 中转连续停帧后判定不可用，本次会话内不再尝试（单路直连即可正常出画面）。 */
-    private boolean glRelayDisabled = false;
+    private volatile GlCameraRelay glRelay = null;
     /** v1.63：中转停帧看门狗的采样状态。 */
     private long relayWatchFrames = -1L;
     private long relayWatchChangeMs = 0L;
@@ -200,44 +207,93 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
     private long pProbeMismatchLoggedAt = 0L;
     /** v1.67 beta4：最近一次心跳（无条件）写入时刻，用于确认探针本体还活着。 */
     private long pProbeHeartbeatAt = 0L;
-    private long relayLastStallMs = 0L;
-    private int relayStallCount = 0;
-    /** v1.67：最近一次因资源压力整实例重建中转的时刻。 */
-    private long lastRelayFullRebuildMs = 0L;
-    /** v1.67：60 秒窗口内的整实例重建次数，超过 2 次即降级直连。 */
-    private int relayFullRebuildCount = 0;
+    // One process actor survives Service teardown to receive late HAL closure callbacks.
+    private static final HandlerThread CAMERA_OWNER_THREAD;
+    private static final Handler CAMERA_OWNER;
+    private static final CameraLifecycle CAMERA_LIFECYCLE = new CameraLifecycle();
+    private static RecoveryBudget recoveryBudget = new RecoveryBudget();
+    private static volatile boolean explicitDisableSeen;
+    private static volatile boolean episodeBlocked;
+    static {
+        CAMERA_OWNER_THREAD = new HandlerThread("camera-owner");
+        CAMERA_OWNER_THREAD.start();
+        CAMERA_OWNER = new Handler(CAMERA_OWNER_THREAD.getLooper());
+    }
+    private final java.util.concurrent.atomic.AtomicBoolean desiredQueued = new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicBoolean desiredReconcile = new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicBoolean closeQueued = new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicBoolean heartbeatQueued = new java.util.concurrent.atomic.AtomicBoolean();
+    private volatile boolean serviceStopping;
+    private volatile boolean episodeResetPending;
+    private volatile long explicitEnableSequence;
+    private volatile boolean cameraWanted;
+    private volatile boolean cameraUnavailable;
+    private volatile long intentEpoch;
+    private synchronized long advanceIntent() { return ++intentEpoch; }
+    private long openToken;
+    // Owner-thread identity IDs are retained only for admitted output recoveries (at most five
+    // targets per episode). Unlike identityHashCode, these cannot alias distinct textures.
+    private final java.util.IdentityHashMap<Object, Long> outputFaultTargetIds = new java.util.IdentityHashMap<>();
+    private long nextOutputFaultTargetId;
+    private volatile boolean deviceClosing;
+    private volatile long ownerHeartbeatMs;
+    private boolean resumeAfterClose;
+    private SessionAttempt attempt;
+    private final java.util.ArrayList<SessionAttempt> retiringAttempts = new java.util.ArrayList<>();
+    // Main-thread-only destruction filter; weak keys do not retain every historic texture.
+    private final java.util.WeakHashMap<SurfaceTexture, Boolean> destroyedTextures = new java.util.WeakHashMap<>();
+    private final java.util.WeakHashMap<Object, Boolean> unavailableTargets = new java.util.WeakHashMap<>();
+    private volatile long lastSUpdatedMs;
+    private volatile long sUpdatedTotal;
+    private volatile DesiredPreview desiredPreview = new DesiredPreview(0L, false, null, null, null,
+            new java.util.ArrayList<GlCameraRelay.Target>());
 
-    private Surface previewSurface;
-    /** v1.57 beta4：previewSurface 当前绑定的 SurfaceTexture，用于同纹理复用 Surface 而不重建。 */
-    private SurfaceTexture previewSurfaceTex = null;
-    /** v1.57 beta4：当前已打开的 cameraId（openCamera 成功下发时记录，供复用判断）。 */
-    private String openedCameraId = null;
-    /** v1.57 beta4：openCamera 失败重试计数（onOpened 归零）。 */
-    private int openRetryCount = 0;
-    /** v1.57 beta4：openCamera 最大重试次数。 */
-    private static final int OPEN_RETRY_MAX = 3;
-    /** v1.57 beta4：createCaptureSession 在途标志（重建飞行锁，防双窗并发 configure）。 */
-    private volatile boolean sessionCreating = false;
-    /** v1.57 beta4：会话重建期间收到的新请求，串行补建一次。 */
-    private volatile boolean sessionRebuildPending = false;
-    /** v1.57 beta4：会话 configure 失败重试计数（onConfigured 归零）。 */
-    private int sessionRetryCount = 0;
-    /** v1.57 beta4：会话 configure 最大重试次数。 */
-    private static final int SESSION_RETRY_MAX = 2;
-    // ---- v1.57 beta5：会话重建去抖 / target 签名去重 / 目标延迟释放 ----
-    /** 当前已生效会话的 target 签名（M=主窗, R=BSD 右窗, L=左编辑窗, E=右编辑窗, I=仪表投影）。
-     * 目标集合未变化时跳过重建，杜绝同帧多次整条会话重配。 */
-    private String sessionTargetSig = "";
-    /** 重建请求序号：每次发起重建递增，过期会话回调按序号丢弃，防止旧会话覆盖新状态。 */
-    private int sessionReqSeq = 0;
-    /** 待释放 Surface：等新会话配置成功后再释放，避免会话向已释放目标提交帧导致画面冻结。 */
-    private final java.util.ArrayList<Surface> pendingSurfaceRelease = new java.util.ArrayList<>();
-    /** 待释放 SurfaceTexture：同上。 */
-    private final java.util.ArrayList<SurfaceTexture> pendingTexRelease = new java.util.ArrayList<>();
-    /** openCamera 单飞标志：并发 openCamera 会产生多个 StateCallback 相互关闭相机。 */
-    private boolean cameraOpening = false;
-    /** openCamera 单飞起始时间（ms），超过 3s 视为失效允许重新打开。 */
-    private long cameraOpeningAtMs = 0L;
+    private static final class DesiredPreview {
+        final long intent;
+        final boolean wanted;
+        final String preferredCamera, fallbackCamera, direction;
+        final java.util.List<GlCameraRelay.Target> outputs;
+        DesiredPreview(long intent, boolean wanted, String camera, String fallback, String direction,
+                       java.util.List<GlCameraRelay.Target> outputs) {
+            this.intent = intent; this.wanted = wanted; this.preferredCamera = camera;
+            this.fallbackCamera = fallback; this.direction = direction;
+            this.outputs = java.util.Collections.unmodifiableList(new java.util.ArrayList<>(outputs));
+        }
+    }
+    private final class SessionAttempt {
+        final long token, open, intent;
+        final CameraDevice device;
+        final GlCameraRelay relay;
+        final Surface input;
+        final String signature;
+        CameraCaptureSession session;
+        boolean retired, failed;
+        final CameraLifecycle.Lease lease;
+        SessionAttempt(long token, GlCameraRelay relay, Surface input) {
+            this.token = token; this.open = openToken; this.intent = intentEpoch;
+            this.device = cameraDevice; this.relay = relay; this.input = input;
+            this.signature = "RELAY:" + relay.getGeneration() + ":" + System.identityHashCode(input);
+            this.lease = new CameraLifecycle.Lease(new Runnable() { @Override public void run() {
+                SessionAttempt.this.relay.releaseInputSurface(SessionAttempt.this.input);
+            }});
+        }
+        boolean current() {
+            return !retired && !serviceStopping && !cameraUnavailable && cameraWanted
+                    && intent == intentEpoch && attempt == this
+                    && CAMERA_LIFECYCLE.currentSession(CameraOverlayService.this, open, device, token);
+        }
+        void releaseLease() {
+            lease.closeConfirmed();
+        }
+    }
+
+    /** Read-only UI publication; writes belong to the process camera actor. */
+    private volatile String openedCameraId;
+    private volatile boolean sessionCreating;
+    /** Only committed after setRepeatingRequest returns successfully. */
+    private volatile String sessionTargetSig = "";
+    private volatile boolean cameraOpening;
+
     /** AVM 守护重发计数：达到上限后停止，避免反复下发打断预览流。 */
     private int avmRefreshCount = 0;
     /** AVM 守护重发次数上限。 */
@@ -264,7 +320,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
     // ---- v1.52：SignalGate 慢变量门控 / BSD 旁路 / Camera1 回退 / R 挡退出延时抑制 ----
     private SignalGate signalGate;
     private SideWarning sideWarning;
-    private Camera1Preview camera1Preview;
+
     /** BSD 提醒开关（偏好 bsd_warning_enabled，默认 false）。 */
     private boolean bsdWarningEnabled = false;
     /** R 挡退出延时抑制窗口时长（ms，偏好 r_exit_suppress_ms，默认 2000）。 */
@@ -331,26 +387,16 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
      * 做成常量开关：真机若出现复用后不出图，改 false 即回到「复用时强制重建会话」。</p>
      */
     private static final boolean LINGER_REUSE_SESSION = true;
-    /**
-     * v1.67 beta8：相机释放后到允许再次 openCamera 的最小间隔。
-     *
-     * <p>HAL 侧 close 是异步的，紧接着 openCamera 会拿到 CAMERA_IN_USE，落进
-     * scheduleOpenRetry 的 300/600/900ms 递增重试，用户看到的就是"打灯半天不出画面"。
-     * 先等冷却窗口过去再开，把这段重试换成一次有序等待。</p>
-     */
-    private static final long CAMERA_REOPEN_GUARD_MS = 0L;   // v1.70：归零，等价 beta5 的「说开就开」
-    /** 已排一次冷却后的重开请求，避免重复排队（beta8）。 */
-    private boolean cameraReopenPending = false;
-    /** 最近一次释放相机的时间戳，用于 reopen 冷却判定（beta8）。 */
-    private long lastCameraClosedMs = 0L;
     /** 「相机已收窗、待延迟释放」计时是否在跑。 */
     private boolean cameraLingerActive = false;
+    private long cameraLingerEpoch;
     /** 延迟窗口内被复用（取消释放）的次数，仅用于诊断打点。 */
     private int cameraLingerReuseCount = 0;
     /** 延迟到期：完整释放相机与会话（幂等）。 */
     private final Runnable cameraLingerRunnable = new Runnable() {
         @Override
         public void run() {
+            if (cameraLingerEpoch != intentEpoch || serviceStopping || !cameraLingerActive) return;
             boolean wasActive = cameraLingerActive;
             cameraLingerActive = false;
             boolean had = cameraDevice != null || captureSession != null;
@@ -372,9 +418,9 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
     private View bsdRightOverlayView = null;
     private TextureView bsdRightTextureView = null;
     private TextView bsdRightLabelView = null;
-    private Surface bsdRightSurface = null;
+
     /** v1.57 beta4：bsdRightSurface 当前绑定的 SurfaceTexture（用于同纹理复用 Surface）。 */
-    private SurfaceTexture bsdRightSurfaceTex = null;
+
     /** BSD 右窗当前是否显示。 */
     private boolean bsdRightOverlayShowing = false;
     /** 当前预览会话是否为“双 surface”模式（主窗 + BSD 右窗），true 时 createPreviewSession 同时输出两路。 */
@@ -623,9 +669,9 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         cameraManager = (CameraManager) getSystemService(CAMERA_SERVICE);
         mainHandler = new Handler(Looper.getMainLooper());
-        bgThread = new HandlerThread("camera-bg");
-        bgThread.start();
-        bgHandler = new Handler(bgThread.getLooper());
+        bgThread = CAMERA_OWNER_THREAD;
+        bgHandler = CAMERA_OWNER;
+        cameraUnavailable = episodeBlocked;
         createNotificationChannel();
         // v1.58：一次性把旧版窗口/画面配置映射到 pa_/pb_ 新键
         migrateV158();
@@ -643,6 +689,24 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         }
         String action = intent.getAction();
         if (action == null) action = "";
+        boolean fullDisable = ACTION_HIDE_ALL.equals(action)
+                || (ACTION_STOP_LINK.equals(action) && !manualVisible.get())
+                || (ACTION_HIDE_MANUAL.equals(action) && !linkActive.get());
+        if (fullDisable) {
+            explicitDisableSeen = true;
+            episodeResetPending = false;
+            explicitEnableSequence++;
+            releaseCamera();
+            stopProjection();
+            bgHandler.post(new Runnable() { @Override public void run() {
+                if (glRelay != null) { GlCameraRelay old = glRelay; glRelay = null; old.release(); }
+            }});
+        }
+        if ((ACTION_START_LINK.equals(action) || ACTION_SHOW_MANUAL.equals(action)) && explicitDisableSeen) {
+            episodeResetPending = true;
+            final long enable = ++explicitEnableSequence;
+            awaitExplicitEnable(enable, android.os.SystemClock.elapsedRealtime() + 10000L);
+        }
         if (ACTION_START_LINK.equals(action)) {
             startForegroundCompat();
             String host = intent.getStringExtra(EXTRA_HOST);
@@ -682,6 +746,34 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
             closeSlotEditInternal();
         }
         return START_STICKY;
+    }
+
+    /** A user off/on may wait for real retirement, never reset merely because a timer expired. */
+    private void awaitExplicitEnable(final long enable, final long deadline) {
+        if (!bgHandler.postDelayed(new Runnable() { @Override public void run() {
+            if (serviceStopping || !episodeResetPending || enable != explicitEnableSequence) return;
+            if (CAMERA_LIFECYCLE.isFree() && GlCameraRelay.areAllResourcesReleased()
+                    && ICLinkProjector.areAllResourcesReleased()) {
+                recoveryBudget = new RecoveryBudget();
+                outputFaultTargetIds.clear(); // old episode resources have all confirmed retirement
+                explicitDisableSeen = false;
+                episodeBlocked = false;
+                if (!mainHandler.post(new Runnable() { @Override public void run() {
+                    if (serviceStopping || enable != explicitEnableSequence || !episodeResetPending) return;
+                    episodeResetPending = false;
+                    cameraUnavailable = false;
+                    if (textureView != null) textureView.setVisibility(View.VISIBLE);
+                    if (bsdRightTextureView != null) bsdRightTextureView.setVisibility(View.VISIBLE);
+                    if (slotEditP != null) slotEditP.textureView.setVisibility(View.VISIBLE);
+                    if (slotEditS != null) slotEditS.textureView.setVisibility(View.VISIBLE);
+                    unavailableTargets.clear();
+                    if (hasAnyPreviewTarget()) { startProjectionIfEnabled(); openCamera(); }
+                }})) failClosed("explicit enable delivery rejected");
+            } else if (android.os.SystemClock.elapsedRealtime() >= deadline) {
+                episodeResetPending = false;
+                failClosed("previous resources still retiring; explicit enable not admitted");
+            } else awaitExplicitEnable(enable, deadline);
+        }}, 100L)) failClosed("explicit enable scheduling rejected");
     }
 
     /** 开启联动轮询：创建 ADB 连接并启动 SignalMonitor（300ms 轮询转向灯）。 */
@@ -838,6 +930,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         mainHandler.post(new Runnable() {
             @Override
             public void run() {
+                if (serviceStopping) return;
                 if (anyOn && direction != null) {
                     // v1.65 beta1：双闪（左右同时亮）单独处理——由「双闪联动」开关决定是否双侧出图
                     if ("BOTH".equals(direction)) {
@@ -959,6 +1052,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         mainHandler.post(new Runnable() {
             @Override
             public void run() {
+                if (serviceStopping) return;
                 if (sideWarning != null) {
                     sideWarning.update(s, bsdShowAlways);
                 }
@@ -977,7 +1071,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
                     if (narrow) {
                         serviceLog("系统影像激活（窄路辅助），两窗整体让位并释放相机");
                         hideAllSlots();
-                        if (cameraDevice != null) {
+                        if (cameraWanted || cameraOpening || cameraDevice != null) {
                             closeCameraOnly();
                         }
                         stopProjection();
@@ -1008,28 +1102,8 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         });
     }
 
-    /** Camera1 回退钩子：Camera2 打开失败时若偏好 camera1_fallback=true 且纹理就绪，尝试 Camera1 预览。 */
-    private void tryCamera1Fallback() {
-        if (!getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean("camera1_fallback", false)) {
-            return;
-        }
-        if (textureView == null || textureView.getSurfaceTexture() == null) {
-            Log.e(TAG, "camera1 fallback: textureView not ready");
-            return;
-        }
-        try {
-            camera1Preview = new Camera1Preview(textureView.getSurfaceTexture(), BUFFER_W, BUFFER_H);
-            if (camera1Preview.open()) {
-                serviceLog("Camera2 打开失败，已回退 Camera1 预览（Phase 2 验证态）");
-            } else {
-                serviceLog("Camera1 回退失败，浮窗仅保留静态画面");
-                camera1Preview = null;
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "camera1 fallback error", e);
-            camera1Preview = null;
-        }
-    }
+
+
 
     // ---- v1.54：BSD 预警自动弹窗（最低优先级） ----
 
@@ -1334,6 +1408,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
 
     /** 统一分配入口：任何电平变化都走这里重算 P/S 两窗内容。 */
     private void evaluateSlots(String reason) {
+        if (serviceStopping) return;
         if (slotEditActive) {
             serviceLog("浮窗位置编辑中，暂不刷新槽位（" + reason + "）");
             return;
@@ -1419,7 +1494,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         if (leadSide == null) {
             // v1.58：无活跃槽位时的收尾必须幂等且零噪音——
             // 相机已释放、投影未运行时直接返回，避免 500ms 慢变量回调反复空转。
-            boolean hadDevice = cameraDevice != null;
+            boolean hadDevice = cameraDevice != null || cameraOpening || cameraWanted;
             if (hadDevice) {
                 if (canLingerCamera()) {
                     // v1.67 beta6：能留就留（已在计时则幂等，不续期）
@@ -1430,26 +1505,12 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
                     closeCameraOnly();
                 }
             }
-            boolean projRunning = iclProjectionEnabled && icProjector.isRunning();
-            if (hadDevice || projRunning) {
-                stopProjection();
-            }
+            // stop also cancels an asynchronous encoder initialization, before isRunning becomes true.
+            stopProjection();
             return;
         }
-        if (cameraDevice == null) {
-            openCamera();
-        } else {
-            if (relaunch) {
-                if (lingerReuse && LINGER_REUSE_SESSION) {
-                    serviceLog("打灯/预警重新拉起（延迟窗口内）：已重下发 display-mode，会话仍有效不重建（lead="
-                            + leadSide + "）");
-                } else {
-                    sessionTargetSig = "";
-                    serviceLog("打灯/预警重新拉起：已重下发 display-mode 并强制重建预览会话（lead=" + leadSide + "）");
-                }
-            }
-            requestSessionRebuild(0L);
-        }
+        // The signal decision is the authority to request a stream, even during an old close.
+        openCamera();
         startProjectionIfEnabled();
     }
 
@@ -1806,6 +1867,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
 
     /** 创建次级窗 S（幂等）。窗口常驻，此后仅做移屏隐藏/移回显示，Surface 与预览会话全程存活。 */
     private void ensureSecondaryWindow() {
+        if (serviceStopping) return;
         if (bsdRightOverlayView != null) return;
         try {
             LayoutInflater li = (LayoutInflater) getSystemService(LAYOUT_INFLATER_SERVICE);
@@ -1965,6 +2027,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
     private final TextureView.SurfaceTextureListener bsdRightSurfaceListener = new TextureView.SurfaceTextureListener() {
         @Override
         public void onSurfaceTextureAvailable(SurfaceTexture st, int width, int height) {
+            if (serviceStopping || bsdRightTextureView == null || bsdRightTextureView.getSurfaceTexture() != st) return;
             st.setDefaultBufferSize(BUFFER_W, BUFFER_H);
             // v1.54 beta3：右窗 surface 就绪后重放渲染矩阵（复用右转向灯画面源，与位置解耦）
             applyBsdRightRenderTransform();
@@ -1972,7 +2035,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
             // 否则主窗纹理暂不可用时右窗永远拿不到画面（双开空框的另一诱因）
             // v1.69：同主窗——新纹理就绪后立刻回表（换纹理自愈后右窗空框的直接原因）
             refreshRelayOutputs();
-            if (cameraDevice != null) {
+            if (cameraWanted) {
                 createPreviewSession();
             }
         }
@@ -1986,36 +2049,18 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
 
         @Override
         public boolean onSurfaceTextureDestroyed(SurfaceTexture st) {
-                        // v1.62：GL 中转模式下该纹理由 relay 作为输出端持有，先摘 EGLSurface 再释放
-            if (glRelayMode && glRelay != null) {
-                glRelay.detachOutput("S", st);
-                requestSessionRebuild(0L);
-                return false;
-            }
-// v1.57 beta5：与主窗一致——该纹理若仍是会话目标，由本端延后释放；
-            // 直接交给系统释放会让同一路会话向死纹理提交帧，主窗一并冻结。
-            if (bsdRightSurfaceTex != null && bsdRightSurfaceTex == st) {
-                if (bsdRightSurface != null) {
-                    pendingSurfaceRelease.add(bsdRightSurface);
-                    bsdRightSurface = null;
-                }
-                pendingTexRelease.add(st);
-                bsdRightSurfaceTex = null;
-                // v1.60_beta2：不再把 bsdRightTextureView 置空。窗口/View 仍然存在，
-                // 置空后 ensureSecondaryWindow 因 bsdRightOverlayView != null 直接返回，
-                // 次级窗将永久失去纹理引用（黑窗），后续会话也永远少一路目标。
-                if (hasAnyPreviewTarget()) {
-                    requestSessionRebuild(0L);
-                } else if (cameraDevice != null) {
-                    releaseCamera();
-                }
-                return false;
-            }
-            return true;
+            // Return false transfers only this exact texture. Retired old relays remain discoverable.
+            destroyedTextures.put(st, Boolean.TRUE);
+            GlCameraRelay.releaseTextureWhenUnused(st);
+            refreshRelayOutputs();
+            return false;
         }
 
         @Override
         public void onSurfaceTextureUpdated(SurfaceTexture st) {
+            if (bsdRightTextureView == null || bsdRightTextureView.getSurfaceTexture() != st) return;
+            lastSUpdatedMs = android.os.SystemClock.elapsedRealtime();
+            sUpdatedTotal++;
         }
     };
 
@@ -2121,6 +2166,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
 
     /** 按方向显示/切换浮窗：首次弹窗创建 overlay，方向变化释放旧摄像头并按新方向重开。 */
     private void showOverlayForDirection(String dir) {
+        if (serviceStopping) return;
         // v1.54：BSD 自动弹窗调用（bsdAutoCalling=true）已由 onBsdEdge 完成最低优先级抑制判定，
         // 这里跳过打灯专属抑制块；同时不参与打灯幂等锁/方向锁写入，避免污染打灯链路。
         boolean bsdCall = bsdAutoCalling;
@@ -2209,7 +2255,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
                     if (canReuseOpenedCamera()) {
                         serviceLog("相机已打开且画面源一致，跳过重开，仅重建预览会话");
                         if (hasAnyPreviewTarget()) {
-                            createPreviewSession();
+                            openCamera();
                         }
                     } else {
                         closeCameraOnly();
@@ -2241,6 +2287,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
             openCamera();
         } else {
             updateLabel();
+            openCamera();
         }
     }
 
@@ -2290,6 +2337,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
     /** v1.67 beta6：排一次延迟释放，覆盖上一次未到期的计时（幂等）。 */
     private void scheduleCameraLinger() {
         if (cameraDevice == null && captureSession == null) {
+            releaseCamera();
             return;
         }
         if (cameraLingerActive) {
@@ -2299,6 +2347,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         Handler h = mainHandler != null ? mainHandler : pProbeHandler;
         h.removeCallbacks(cameraLingerRunnable);
         cameraLingerActive = true;
+        cameraLingerEpoch = intentEpoch;
         cameraLingerReuseCount = 0;
         if (!h.postDelayed(cameraLingerRunnable, LINGER_MS)) {
             cameraLingerActive = false;
@@ -2353,6 +2402,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
 
     /** 启用仪表投影时异步启动（失败静默降级，绝不阻塞/影响浮窗）。 */
     private void startProjectionIfEnabled() {
+        if (serviceStopping || cameraUnavailable || episodeResetPending) return;
         if (!iclProjectionEnabled) {
             return;
         }
@@ -2411,6 +2461,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
     }
 
     private void ensureOverlay() {
+        if (serviceStopping) return;
         if (overlayView != null) return;
         LayoutInflater li = (LayoutInflater) getSystemService(LAYOUT_INFLATER_SERVICE);
         overlayView = li.inflate(R.layout.overlay_window, null);
@@ -3554,7 +3605,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
             // attach 会命中旧记录、拒绝新 SurfaceTexture，画面同样起不来。
             // 注意传 null：只从 relay 摘掉输出、不在此处 release 纹理，
             // 纹理释放统一由 removeView 触发的 onSurfaceTextureDestroyed 完成（传 st 时
-            // detachOutput 内部会 st.release()，再叠加销毁回调就会双重释放）。
+            // 精确纹理的所有权转移仅由 destroyed 回调完成）。
             if (glRelay != null) {
                 try {
                     glRelay.detachOutput("P", null);
@@ -3575,6 +3626,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
     private final TextureView.SurfaceTextureListener surfaceListener = new TextureView.SurfaceTextureListener() {
         @Override
         public void onSurfaceTextureAvailable(SurfaceTexture st, int width, int height) {
+            if (serviceStopping || textureView == null || textureView.getSurfaceTexture() != st) return;
             // v1.38：width/height 是 TextureView 视图尺寸（=浮窗窗口尺寸），不是相机输出 buffer 尺寸，
             // 不得写入 bufferW/H；这里强制固定输出 buffer 为 1280x720，保证渲染 scale 与窗口彻底解耦
             st.setDefaultBufferSize(BUFFER_W, BUFFER_H);
@@ -3586,7 +3638,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
             // 但那时新 TextureView 的 isAvailable() 还是 false，P 路直接被判不合格摘表；
             // 等纹理真就绪了却没人再刷新，该窗只能停最后一帧，直到窗口显隐或探针兜底。
             refreshRelayOutputs();
-            if (cameraDevice != null) createPreviewSession();
+            if (cameraWanted) createPreviewSession();
         }
 
         @Override
@@ -3600,137 +3652,223 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
 
         @Override
         public boolean onSurfaceTextureDestroyed(SurfaceTexture st) {
-                        // v1.62：GL 中转模式下该纹理由 relay 作为输出端持有，先摘 EGLSurface 再释放
-            if (glRelayMode && glRelay != null) {
-                glRelay.detachOutput("P", st);
-                requestSessionRebuild(0L);
-                return false;
-            }
-// v1.57 beta5：不再"任一纹理销毁就 releaseCamera()"。
-            // 旧窗口的销毁回调可能晚于新窗口的 openCamera 到达，无条件关相机会把刚打开的
-            // 设备整体关掉，表现为画面卡住 / 单窗空白。
-            if (previewSurfaceTex != null && previewSurfaceTex == st) {
-                // 该纹理仍是当前会话目标：先摘出目标，等新会话生效后再释放
-                if (previewSurface != null) {
-                    pendingSurfaceRelease.add(previewSurface);
-                    previewSurface = null;
-                }
-                pendingTexRelease.add(st);
-                previewSurfaceTex = null;
-                if (hasAnyPreviewTarget()) {
-                    requestSessionRebuild(0L);
-                } else if (cameraDevice != null) {
-                    releaseCamera();
-                }
-                return false;
-            }
-            return true;
+            // Return false transfers only this exact texture. Retired old relays remain discoverable.
+            destroyedTextures.put(st, Boolean.TRUE);
+            GlCameraRelay.releaseTextureWhenUnused(st);
+            refreshRelayOutputs();
+            return false;
         }
 
         @Override
         public void onSurfaceTextureUpdated(SurfaceTexture st) {
-            // v1.67 beta3：主窗画面更新探针——每次真正上屏都打一个时间戳。
-            // TextureView 只要还在被喂帧就一定会回调；若 relay 侧 swap 正常而这里不再触发，
-            // 说明问题在主窗这一段消费侧，而不是中转/相机输入侧。
-            lastPUpdatedMs = System.currentTimeMillis();
+            // Consumer progress only, not proof of physical presentation or fresh camera content.
+            if (textureView == null || textureView.getSurfaceTexture() != st) return;
+            lastPUpdatedMs = android.os.SystemClock.elapsedRealtime();
             pUpdatedTotal++;
         }
     };
 
     private void openCamera() {
-        // v1.57 beta5：单飞保护——并发 openCamera 会产生多个 StateCallback，后到的
-        // onError/onDisconnected 会把刚建立的设备关掉，表现为"画面卡住 / 空框"。
-        if (cameraDevice != null) {
-            Log.i(TAG, "openCamera: 相机已打开，跳过重复打开");
+        if (serviceStopping || cameraUnavailable || episodeResetPending) return;
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            final long epoch = intentEpoch;
+            if (!mainHandler.post(new Runnable() { @Override public void run() {
+                if (epoch == intentEpoch && !serviceStopping && cameraWanted) publishDesiredPreview(true);
+            }})) failClosed("main handler rejected open");
             return;
         }
-        // v1.67 beta8：刚释放完相机时不要立刻 open——HAL 尚未释放完，会撞 CAMERA_IN_USE
-        long closedAt = lastCameraClosedMs;
-        if (closedAt > 0L) {
-            long sinceClose = System.currentTimeMillis() - closedAt;
-            if (sinceClose >= 0L && sinceClose < CAMERA_REOPEN_GUARD_MS) {
-                final long waitMs = CAMERA_REOPEN_GUARD_MS - sinceClose;
-                if (!cameraReopenPending) {
-                    cameraReopenPending = true;
-                    Handler oh = bgHandler != null ? bgHandler : pProbeHandler;
-                    Log.i(TAG, "openCamera: 距上次相机释放仅 " + sinceClose + "ms，延后 " + waitMs + "ms 再打开");
-                    if (oh != null) {
-                        oh.postDelayed(new Runnable() {
-                            @Override
-                            public void run() {
-                                cameraReopenPending = false;
-                                if (cameraDevice == null && hasAnyPreviewTarget()) {
-                                    openCamera();
-                                }
-                            }
-                        }, waitMs);
-                    } else {
-                        cameraReopenPending = false;
-                    }
-                }
-                return;
+        if (!cameraWanted) { cameraWanted = true; advanceIntent(); ownerHeartbeatMs = android.os.SystemClock.elapsedRealtime(); }
+        startPFrameProbe();
+        publishDesiredPreview(true);
+    }
+
+    /** Main thread alone reads Views and preferences. No View crosses to the camera actor. */
+    private void publishDesiredPreview(boolean reconcile) {
+        if (Looper.myLooper() != Looper.getMainLooper()) throw new IllegalStateException("main owner");
+        java.util.ArrayList<GlCameraRelay.Target> outputs = buildRelayOutputs();
+        for (int i = outputs.size() - 1; i >= 0; i--) {
+            if ((outputs.get(i).texture != null && destroyedTextures.containsKey(outputs.get(i).texture))
+                    || unavailableTargets.containsKey(outputs.get(i).identity())) outputs.remove(i);
+        }
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        String key = "LEFT".equals(direction) ? "left_camera_id" : "right_camera_id";
+        String fallback = prefs.getString(key, null);
+        String preferred = fallback;
+        if (bsdEditActive) preferred = prefs.getString("LEFT".equals(direction)
+                ? "bsd_left_camera_id" : "bsd_right_camera_id", preferred);
+        final DesiredPreview snapshot = new DesiredPreview(intentEpoch,
+                cameraWanted && !serviceStopping && !cameraUnavailable, preferred, fallback, direction, outputs);
+        desiredPreview = snapshot;
+        if (reconcile) desiredReconcile.set(true);
+        queueDesiredPreview();
+    }
+
+    /** At most one queued snapshot delivery; obsolete snapshots retain no target references. */
+    private void queueDesiredPreview() {
+        if (!desiredQueued.compareAndSet(false, true)) return;
+        if (!bgHandler.post(new Runnable() { @Override public void run() {
+            DesiredPreview snapshot = desiredPreview;
+            boolean reconcile = desiredReconcile.getAndSet(false);
+            try {
+                if (snapshot.intent != intentEpoch || serviceStopping || cameraUnavailable) return;
+                GlCameraRelay relay = glRelay;
+                if (relay != null) relay.setOutputs(new java.util.ArrayList<>(snapshot.outputs));
+                if (reconcile) reconcileCamera();
+            } finally {
+                desiredQueued.set(false);
+                if (!serviceStopping && !cameraUnavailable
+                        && (snapshot != desiredPreview || desiredReconcile.get())) queueDesiredPreview();
             }
-        }
-        long openNow = System.currentTimeMillis();
-        if (cameraOpening && openNow - cameraOpeningAtMs < 3000L) {
-            Log.i(TAG, "openCamera: 正在打开中，忽略重复请求");
-            return;
-        }
-        cameraOpening = true;
-        cameraOpeningAtMs = openNow;
-        // v1.63：每次真正重开相机时重置中转状态；20s 内连续失效过则保持禁用，
-        // 避免「尝试中转→卡 1.5s→回退」的反复抖动。
-        if (System.currentTimeMillis() - relayLastStallMs > 20000L) {
-            glRelayDisabled = false;
-            relayStallCount = 0;
-        }
-        glRelayMode = !glRelayDisabled;
-        if (checkSelfPermission(Manifest.permission.CAMERA)
-                != PackageManager.PERMISSION_GRANTED) {
-            cameraOpening = false;
-            Log.e(TAG, "no CAMERA permission");
-            return;
-        }
-        try {
-            String[] ids = cameraManager.getCameraIdList();
-            if (ids.length == 0) {
-                Log.e(TAG, "no camera device");
-                return;
-            }
-            cameraId = pickCameraId(ids);
-            openedDirection = direction;
-            openedCameraId = cameraId;
-            cameraManager.openCamera(cameraId, deviceCallback, bgHandler);
-        } catch (CameraAccessException | SecurityException e) {
-            cameraOpening = false;
-            Log.e(TAG, "openCamera failed", e);
-            // v1.57 beta4：失败先延迟重试（CAMERA_IN_USE 等瞬时占用），重试耗尽再走 Camera1 回退
-            if (scheduleOpenRetry()) {
-                return;
-            }
-            // v1.52：Camera2 打开失败时尝试 Camera1 回退钩子（默认关闭，偏好 camera1_fallback 开启）
-            tryCamera1Fallback();
+        }})) {
+            desiredQueued.set(false);
+            failClosed("camera owner rejected desired targets");
         }
     }
 
-    /** v1.57 beta4：openCamera 失败延迟重试（最多 OPEN_RETRY_MAX 次，间隔递增），避免相机占用后彻底黑屏。 */
-    private boolean scheduleOpenRetry() {
-        if (openRetryCount >= OPEN_RETRY_MAX) {
-            Log.e(TAG, "openCamera 重试次数已达上限 " + OPEN_RETRY_MAX + "，放弃");
-            return false;
-        }
-        openRetryCount++;
-        Log.w(TAG, "openCamera 失败，将进行第 " + openRetryCount + " 次延迟重试");
-        bgHandler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                if (cameraDevice == null && hasAnyPreviewTarget()) {
-                    openCamera();
-                }
-            }
-        }, 300L * openRetryCount);
-        return true;
+    private void reconcileCamera() {
+        DesiredPreview desired = desiredPreview;
+        if (serviceStopping || cameraUnavailable || !cameraWanted || !desired.wanted
+                || desired.intent != intentEpoch) return;
+        if (desired.outputs.isEmpty()) return; // Texture availability callback publishes again.
+        if (deviceClosing || cameraOpening) { resumeAfterClose = deviceClosing; return; }
+        if (cameraDevice == null) { openCameraOnOwner(desired); return; }
+        doRebuildSession();
     }
+
+    private void openCameraOnOwner(final DesiredPreview desired) {
+        if (!CAMERA_LIFECYCLE.isFree()) { failClosed("previous camera ownership unconfirmed"); return; }
+        final long token = CAMERA_LIFECYCLE.reserve(this);
+        openToken = token;
+        cameraOpening = true;
+        final long epoch = desired.intent;
+        try {
+            if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED)
+                throw new SecurityException("no CAMERA permission");
+            String[] ids = cameraManager.getCameraIdList();
+            availableCameraIds = ids.clone();
+            if (ids.length == 0) throw new IllegalStateException("no camera device");
+            String selected = ids[0];
+            for (String id : ids) if (id.equals(desired.fallbackCamera)) selected = id;
+            for (String id : ids) if (id.equals(desired.preferredCamera)) selected = id;
+            cameraId = selected;
+            openedCameraId = selected;
+            openedDirection = desired.direction;
+            if (epoch != intentEpoch || serviceStopping || !cameraWanted || cameraUnavailable) {
+                CAMERA_LIFECYCLE.closed(this, token);
+                cameraOpening = false;
+                return;
+            }
+            cameraManager.openCamera(selected, new CameraDevice.StateCallback() {
+                private CameraDevice ownedHandle;
+                @Override public void onOpened(CameraDevice device) {
+                    if (ownedHandle != null && ownedHandle != device) { device.close(); return; }
+                    ownedHandle = device;
+                    if (!CAMERA_LIFECYCLE.owns(CameraOverlayService.this, token)
+                            || epoch != intentEpoch || serviceStopping || !cameraWanted || cameraUnavailable) {
+                        device.close(); return;
+                    }
+                    if (!CAMERA_LIFECYCLE.opened(CameraOverlayService.this, token, device)) {
+                        device.close(); return;
+                    }
+                    cameraOpening = false;
+                    cameraDevice = device;
+                    reconcileCamera();
+                }
+                @Override public void onDisconnected(CameraDevice device) {
+                    if (ownedHandle != null && ownedHandle != device) { device.close(); return; }
+                    ownedHandle = device; deviceFailed(token, device, "disconnected");
+                }
+                @Override public void onError(CameraDevice device, int error) {
+                    if (ownedHandle != null && ownedHandle != device) { device.close(); return; }
+                    ownedHandle = device; deviceFailed(token, device, "error " + error);
+                }
+                @Override public void onClosed(CameraDevice device) {
+                    if (ownedHandle != device || !CAMERA_LIFECYCLE.owns(CameraOverlayService.this, token)) return;
+                    // Device closure also proves pending configuration no longer uses its targets.
+                    for (SessionAttempt old : new java.util.ArrayList<>(retiringAttempts)) old.releaseLease();
+                    retiringAttempts.clear();
+                    if (attempt != null) { attempt.releaseLease(); attempt = null; }
+                    CAMERA_LIFECYCLE.closed(CameraOverlayService.this, token);
+                    cameraDevice = null; captureSession = null; cameraOpening = false;
+                    deviceClosing = false; sessionCreating = false; sessionTargetSig = "";
+                    resumeAfterClose = false;
+                    if (cameraWanted && !serviceStopping && !cameraUnavailable) reconcileCamera();
+                }
+            }, bgHandler);
+            if (!bgHandler.postDelayed(new Runnable() { @Override public void run() {
+                if (CAMERA_LIFECYCLE.owns(CameraOverlayService.this, token) && cameraOpening) {
+                    CAMERA_LIFECYCLE.unavailable(CameraOverlayService.this, token);
+                    failClosed("camera open timeout; reservation retained");
+                }
+            }}, 3000L)) failClosed("open watchdog rejected");
+        } catch (CameraAccessException | SecurityException | IllegalArgumentException | IllegalStateException e) {
+            if (!CAMERA_LIFECYCLE.owns(this, token)) return;
+            CAMERA_LIFECYCLE.closed(this, token); // open rejected synchronously, no HAL handle accepted.
+            cameraOpening = false;
+            recoverCamera(RecoveryBudget.Kind.OPEN_RETRY, "open:" + token, e.toString(), false);
+        }
+    }
+
+    private void deviceFailed(long token, CameraDevice device, String reason) {
+        if (!CAMERA_LIFECYCLE.owns(this, token)) { device.close(); return; }
+        // onError is allowed before onOpened; retain this handle for closure.
+        if (cameraDevice != null && cameraDevice != device) { device.close(); return; }
+        if (cameraDevice == null) cameraDevice = device;
+        if (serviceStopping || cameraUnavailable || !cameraWanted || deviceClosing) {
+            // Error-before-open may be the first usable handle after a pending-open stop.
+            device.close(); return;
+        }
+        recoverCamera(RecoveryBudget.Kind.OPEN_RETRY, "device:" + token, reason, false);
+    }
+
+    private void recoverCamera(RecoveryBudget.Kind kind, String operation, String reason, boolean retireRelay) {
+        if (serviceStopping || cameraUnavailable || !cameraWanted) return;
+        if (!recoveryBudget.admit(operation, kind, "", android.os.SystemClock.elapsedRealtime())) {
+            failClosed("recovery budget exhausted: " + reason); return;
+        }
+        serviceLog("有限恢复 " + kind + " " + recoveryBudget.used() + "/5: " + reason);
+        resumeAfterClose = true;
+        closeOnOwner();
+        if (retireRelay && glRelay != null) {
+            GlCameraRelay old = glRelay; glRelay = null; old.release();
+        }
+        if (CAMERA_LIFECYCLE.isFree()) {
+            resumeAfterClose = false;
+            final long epoch = intentEpoch;
+            if (!bgHandler.postDelayed(new Runnable() { @Override public void run() {
+                if (epoch == intentEpoch) reconcileCamera();
+            }}, 300L)) failClosed("recovery scheduling rejected");
+        }
+    }
+
+    private void failClosed(final String reason) {
+        episodeBlocked = true;
+        cameraUnavailable = true;
+        cameraWanted = false;
+        final long epoch = advanceIntent();
+        serviceLog("影像不可用，停止自动恢复: " + reason);
+        if (bgHandler != null) bgHandler.post(new Runnable() { @Override public void run() {
+            resumeAfterClose = false; closeOnOwner();
+            if (glRelay != null) { GlCameraRelay old = glRelay; glRelay = null; old.release(); }
+        }});
+        if (mainHandler != null) mainHandler.post(new Runnable() { @Override public void run() {
+            if (epoch != intentEpoch) return;
+            cancelCameraLinger();
+            // Only cover existing video. Never create a window or override signal suppression.
+            if (textureView != null) textureView.setVisibility(View.INVISIBLE);
+            if (bsdRightTextureView != null) bsdRightTextureView.setVisibility(View.INVISIBLE);
+            if (slotEditP != null && slotEditP.textureView != null) slotEditP.textureView.setVisibility(View.INVISIBLE);
+            if (slotEditS != null && slotEditS.textureView != null) slotEditS.textureView.setVisibility(View.INVISIBLE);
+            if (labelView != null) labelView.setText("影像不可用，请关闭后重新开启");
+            if (bsdRightLabelView != null) bsdRightLabelView.setText("影像不可用，请关闭后重新开启");
+            if (slotEditP != null) ((TextView) slotEditP.rootView.findViewById(R.id.overlay_label)).setText("影像不可用");
+            if (slotEditS != null) ((TextView) slotEditS.rootView.findViewById(R.id.overlay_label)).setText("影像不可用");
+            stopProjection();
+        }});
+    }
+
+
+
 
     /** v1.57 beta4：当前是否双窗并存（主浮窗 + BSD 右预警窗），双窗共用同一路预览输出。 */
     private boolean isDualPreviewActive() {
@@ -3744,19 +3882,10 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
      * 单窗时按目标 cameraId 是否与已打开的一致判断，仍保留左右不同镜头配置的切换能力。
      */
     private boolean canReuseOpenedCamera() {
-        if (cameraDevice == null) return false;
+        if (cameraDevice == null || openedCameraId == null) return false;
         if (isDualPreviewActive()) return true;
-        if (openedCameraId == null) return false;
-        try {
-            String[] ids = cameraManager.getCameraIdList();
-            if (ids.length == 0) return false;
-            return openedCameraId.equals(pickCameraId(ids));
-        } catch (CameraAccessException e) {
-            Log.e(TAG, "canReuseOpenedCamera 取摄像头列表失败", e);
-            return false;
-        } catch (SecurityException e) {
-            return false;
-        }
+        String[] ids = availableCameraIds;
+        return ids.length > 0 && openedCameraId.equals(pickCameraId(ids));
     }
 
     /**
@@ -3938,132 +4067,49 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
     }
 
     /** 仅关闭摄像头通道（保留 TextureView/SurfaceTexture），用于方向切换后按新方向重开。 */
-    private void closeCameraOnly() {
-        // v1.67 beta8：记录释放时刻，供 openCamera 冷却判定
-        lastCameraClosedMs = System.currentTimeMillis();
-        cameraReopenPending = false;
-        // v1.67 beta6：立即收相机即作废在途的延迟释放计时（幂等）
-        cancelCameraLinger();
-        // v1.57 beta4：主机通道释放时同步复位会话重建状态，避免残留飞行锁阻塞后续重建
-        sessionCreating = false;
-        sessionRebuildPending = false;
-        // v1.60：同时作废会话签名，否则重新开相机时 doRebuildSession 会因签名相同而跳过重建
+    private void closeCameraOnly() { releaseCamera(); }
+
+    private void closeOnOwner() {
         sessionTargetSig = "";
-        // v1.52：Camera1 回退实例一并释放（幂等）
-        if (camera1Preview != null) {
-            camera1Preview.close();
-            camera1Preview = null;
-        }
-        if (captureSession != null) {
-            captureSession.close();
-            captureSession = null;
-        }
-        if (cameraDevice != null) {
-            cameraDevice.close();
-            cameraDevice = null;
-        }
-        if (previewSurface != null) {
-            previewSurface.release();
-            previewSurface = null;
-        }
-        previewSurfaceTex = null;
-        // v1.54：BSD 右浮窗 surface 一并释放
-        if (bsdRightSurface != null) {
-            bsdRightSurface.release();
-            bsdRightSurface = null;
-        }
-        bsdRightSurfaceTex = null;
-        // v1.54 beta4：BSD 编辑窗 surface 一并释放
-        if (bsdEditLeft != null) {
-            bsdEditLeft.releaseSurface();
-        }
-        if (bsdEditRight != null) {
-            bsdEditRight.releaseSurface();
-        }
-    }
-
-    private final CameraDevice.StateCallback deviceCallback = new CameraDevice.StateCallback() {
-        @Override
-        public void onOpened(CameraDevice device) {
-            cameraDevice = device;
-            cameraOpening = false;
-            openRetryCount = 0;
-            sessionRetryCount = 0;
-            // v1.54 beta4：无主窗 textureView（BSD 编辑窗独立预览）时也建立会话
-            if (hasAnyPreviewTarget()) {
-                createPreviewSession();
-            }
-        }
-
-        @Override
-        public void onDisconnected(CameraDevice device) {
-            // v1.57 beta4：断开后原逻辑只置空 cameraDevice，双窗随之永久空框；改为释放并按需延迟重开
-            releaseDeviceAndRetry(device, "onDisconnected");
-        }
-
-        @Override
-        public void onError(CameraDevice device, int error) {
-            // v1.57 beta4：CAMERA_IN_USE 等错误后按需延迟重开（避免双窗空框无法自愈）
-            releaseDeviceAndRetry(device, "onError error=" + error);
-        }
-    };
-
-    /** v1.57 beta4：相机断开/出错后释放设备与会话，并在仍有预览目标时延迟重开。 */
-    private void releaseDeviceAndRetry(CameraDevice device, String reason) {
-        Log.w(TAG, "相机回调 " + reason + "，释放设备并按需重开");
-        cameraOpening = false;
-        sessionTargetSig = "";
-        sessionReqSeq++;
-        try {
-            device.close();
-        } catch (Exception ignored) {
-        }
-        if (cameraDevice == device) {
-            cameraDevice = null;
-            openedCameraId = null;
-        }
-        if (captureSession != null) {
-            try {
-                captureSession.close();
-            } catch (Exception ignored) {
-            }
-            captureSession = null;
-        }
         sessionCreating = false;
-        if (!scheduleOpenRetry()) {
-            Log.e(TAG, "相机不可用且重试已耗尽，等待重新打灯/重开浮窗");
+        sessionCreatingSinceMs = 0L;
+        if (!CAMERA_LIFECYCLE.owns(this, openToken)) return;
+        CAMERA_LIFECYCLE.closing(this, openToken);
+        if (attempt != null) {
+            attempt.retired = true;
+            if (!retiringAttempts.contains(attempt)) retiringAttempts.add(attempt);
+            if (attempt.session != null) attempt.session.close();
+            attempt = null;
+        }
+        captureSession = null;
+        if (!deviceClosing) {
+            deviceClosing = true;
+            if (cameraDevice != null) cameraDevice.close();
+            final long token = openToken;
+            if (!bgHandler.postDelayed(new Runnable() { @Override public void run() {
+                if (CAMERA_LIFECYCLE.owns(CameraOverlayService.this, token) && deviceClosing)
+                    failClosed("camera close unconfirmed; reservation retained");
+            }}, 3000L)) failClosed("close watchdog rejected");
         }
     }
 
     /** v1.54 beta4：是否存在任一可用预览目标（主窗 / BSD 右窗 / BSD 编辑窗）。 */
     private boolean hasAnyPreviewTarget() {
-        // v1.60_beta4：与 collectTargets 同口径——隐藏槽位不算预览目标，
-        // 否则"只剩隐藏窗"时相机会一直挂着不出帧。
+        if (Looper.myLooper() != Looper.getMainLooper()) return !desiredPreview.outputs.isEmpty();
+        if (serviceStopping || cameraUnavailable) return false;
         if (slotPShown && textureView != null && textureView.isAvailable()) return true;
         if (slotSShown && bsdRightTextureView != null && bsdRightTextureView.isAvailable()) return true;
-        if (slotEditP != null && slotEditP.isTargetReady()) return true;
-        if (slotEditS != null && slotEditS.isTargetReady()) return true;
-        return false;
+        return (slotEditP != null && slotEditP.isTargetReady())
+                || (slotEditS != null && slotEditS.isTargetReady());
     }
 
-    /**
-     * v1.57 beta5：预览会话统一入口——请求式重建。
-     * 与 beta4 的差别：
-     * 1) 所有触发点只"请求"，由去抖合并（双开时主窗/右窗/方向切换会在同一帧内连续触发
-     *    3~4 次整条会话重建，车机 HAL 上来不及协商 -> 空框 / 冻结）；
-     * 2) target 集合签名未变化时直接跳过，不做无意义重建；
-     * 3) 关闭旧会话与新会话创建之间留 40ms，等 close 生效，避免"新会话失败且旧会话已关"
-     *    的双输局面（画面永久冻结在最后一帧）；
-     * 4) 失败重试用尽后整机重启相机自愈；过期会话按序号丢弃。
-     */
+    /** Publish desired targets; the camera actor serializes configure behind real close barriers. */
     private void createPreviewSession() {
         requestSessionRebuild(60L);
     }
 
     /** v1.60_beta2：会话配置起始时间，用于 sessionCreating 卡死自愈。 */
     private long sessionCreatingSinceMs = 0L;
-    /** v1.60_beta2：连续会话异常计数，达阈值强制重建窗口纹理。 */
-    private int sessionFailStreak = 0;
 
     /** v1.60_beta2：优先窗 P 最近一次「真实应用」的几何（w,h,x,y）。
      * 槽位隐藏时 lp 会被改成 SLOT_HIDDEN_X/Y(-30000)，此时保存必须回退到这份内存几何，
@@ -4071,140 +4117,45 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
     private int[] lastPGeom = null;
 
     private void requestSessionRebuild(long delayMs) {
-        if (cameraDevice == null) {
-            if (hasAnyPreviewTarget()) {
-                openCamera();
-            }
-            return;
-        }
-        sessionRebuildPending = true;
-        if (bgHandler == null) return;
-        bgHandler.removeCallbacks(sessionRebuildRunnable);
-        bgHandler.postDelayed(sessionRebuildRunnable, delayMs);
+        if (serviceStopping || cameraUnavailable || episodeResetPending || !cameraWanted) return;
+        final long epoch = intentEpoch;
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            startPFrameProbe();
+            publishDesiredPreview(true);
+        } else if (!mainHandler.post(new Runnable() { @Override public void run() {
+            if (epoch == intentEpoch && cameraWanted && !serviceStopping) publishDesiredPreview(true);
+        }})) failClosed("target snapshot rejected");
     }
 
-    private final Runnable sessionRebuildRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (!sessionRebuildPending) return;
-            if (sessionCreating) {
-                // 有会话配置在途：稍后再试，绝不并发 configure
-                // v1.60_beta2：加看门狗——HAL 若没回调 onConfigured/onConfigureFailed（相机异常、
-                // 目标 Surface 失效等），sessionCreating 会永久为 true，重建被无限延后，
-                // 画面从此冻死。超过 1200ms 未回调即强制复位并立即重建一次（自愈）。
-                if (sessionCreatingSinceMs > 0L
-                        && System.currentTimeMillis() - sessionCreatingSinceMs > 1200L) {
-                    serviceLog("会话配置超时未回调（>1200ms），强制复位并重建（自愈）");
-                    recoverOverlayTexture("onConfigured 超时");
-                    sessionCreating = false;
-                    sessionCreatingSinceMs = 0L;
-                    sessionReqSeq++;
-                    sessionTargetSig = "";
-                } else {
-                    bgHandler.postDelayed(this, 60L);
-                    return;
-                }
-            }
-            sessionRebuildPending = false;
-            doRebuildSession();
-        }
-    };
-
-    /** v1.60_beta2：会话配置看门狗——独立自调度，不依赖重建队列是否仍有待办。
-     * 旧实现只在 sessionRebuildRunnable 里检查超时，而该 runnable 一旦执行到
-     * doRebuildSession（pending 已置 false）就不再重投递；此后若 HAL 永久不回调
-     * onConfigured/onConfigureFailed，sessionCreating 永远为 true、重建被无限期延后，
-     * 画面就冻在最后一帧——这是"画面还是会卡死"的核心原因之一。 */
-    private final Runnable sessionWatchdog = new Runnable() {
-        @Override
-        public void run() {
-            if (!sessionCreating || sessionCreatingSinceMs <= 0L) {
-                return;
-            }
-            long waited = System.currentTimeMillis() - sessionCreatingSinceMs;
-            if (waited < 1200L) {
-                if (bgHandler != null) {
-                    bgHandler.postDelayed(this, 300L);
-                }
-                return;
-            }
-            serviceLog("会话配置看门狗：等待 " + waited + "ms 仍无回调，强制复位并重建");
-            sessionCreating = false;
-            sessionCreatingSinceMs = 0L;
-            sessionReqSeq++;
-            sessionTargetSig = "";
-            recoverOverlayTexture("看门狗超时");
-            requestSessionRebuild(60L);
-        }
-    };
-
-    /** 真正执行会话重建（bgHandler 线程）。目标集未变更则跳过。 */
     private void doRebuildSession() {
-        if (cameraDevice == null) return;
-        java.util.ArrayList<Surface> targets = new java.util.ArrayList<>();
-        String sig = collectTargets(targets);
-        if (targets.isEmpty()) {
-            // v1.67 beta8 修复：延迟释放窗口内的空目标是预期状态（窗口已收、相机与会话保活），
-            // 绝不能当作"该收相机"。beta6/beta7 在这里被击穿，L1 等于没做。
-            if (cameraLingerActive && cameraDevice != null) {
-                sessionTargetSig = "RELAY";
-                return;
-            }
-            // v1.60_beta4：编辑窗已创建但纹理还没就绪（addView 后要等一帧布局），
-            // 此时 targets 为空不代表"该收相机"。旧实现直接 releaseCamera，
-            // 打灯有画面时双击浮窗就变成了"先关相机再重开"，重开期间窗口全黑，
-            // 用户看到的就是那个空白框。这里改为稍后重试，保持相机会话。
-            if (slotEditP != null || slotEditS != null) {
-                sessionTargetSig = "WAIT_EDIT_TEXTURE";
-                final int retrySeq = sessionReqSeq;
-                if (bgHandler != null) {
-                    bgHandler.postDelayed(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (retrySeq != sessionReqSeq) return;
-                            if (cameraDevice == null) return;
-                            requestSessionRebuild(60L);
-                        }
-                    }, 120L);
-                }
-                return;
-            }
-            // 目标全部消失：整机释放（此时已无会话使用这些 Surface，可安全释放）
-            sessionTargetSig = "";
-            releaseCamera();
+        if (cameraDevice == null || deviceClosing || serviceStopping || cameraUnavailable || !cameraWanted) return;
+        GlCameraRelay relay = ensureRelay();
+        relay.setOutputs(new java.util.ArrayList<>(desiredPreview.outputs));
+        if (attempt != null) {
+            if (attempt.relay == relay) return;
+            // Strict close barrier: never configure while an old attempt owns targets.
+            resumeAfterClose = true; closeOnOwner(); return;
+        }
+        final long epoch = intentEpoch;
+        Surface input = relay.retainInputSurface();
+        if (epoch != intentEpoch || serviceStopping || cameraUnavailable || !cameraWanted) {
+            if (input != null) relay.releaseInputSurface(input);
             return;
         }
-        if (captureSession != null && sig.equals(sessionTargetSig)) {
-            return;
+        if (input == null || !input.isValid()) {
+            if (input != null) relay.releaseInputSurface(input);
+            failClosed("relay input unavailable; direct fallback disabled"); return;
         }
+        long token = CAMERA_LIFECYCLE.configure(this, openToken, cameraDevice);
+        if (token == 0L) { relay.releaseInputSurface(input); return; }
+        final SessionAttempt current = new SessionAttempt(token, relay, input);
+        attempt = current;
         sessionCreating = true;
-        sessionCreatingSinceMs = System.currentTimeMillis();
-        if (bgHandler != null) {
-            bgHandler.removeCallbacks(sessionWatchdog);
-            bgHandler.postDelayed(sessionWatchdog, 1200L);
-        }
-        final int seq = ++sessionReqSeq;
-        final String newSig = sig;
-        if (captureSession != null) {
-            CameraCaptureSession old = captureSession;
-            captureSession = null;
-            try {
-                old.close();
-            } catch (Exception ignored) {
-            }
-        }
-        final java.util.ArrayList<Surface> tgts = targets;
-        bgHandler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                if (seq != sessionReqSeq) return;
-                if (cameraDevice == null) {
-                    sessionCreating = false;
-                    return;
-                }
-                startSession(tgts, newSig, seq);
-            }
-        }, 40L);
+        sessionCreatingSinceMs = android.os.SystemClock.elapsedRealtime();
+        startSession(current);
+        if (!bgHandler.postDelayed(new Runnable() { @Override public void run() {
+            if (current.current() && sessionCreating) failAttempt(current, "configure timeout");
+        }}, 1200L)) failAttempt(current, "configure watchdog rejected");
     }
 
     /**
@@ -4296,23 +4247,12 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
      * 所以任何窗口显隐 / 纹理更换之后都必须调它。</p>
      */
     private void refreshRelayOutputs() {
-        if (!glRelayMode || glRelayDisabled) return;
-        final android.os.Handler bh = bgHandler;
-        if (bh == null) return;
-        if (android.os.Looper.myLooper() != bh.getLooper()) {
-            bh.post(new Runnable() {
-                @Override
-                public void run() {
-                    refreshRelayOutputs();
-                }
-            });
-            return;
-        }
-        GlCameraRelay relay = glRelay;
-        if (relay == null || !relay.isAlive()) return;
-        java.util.ArrayList<GlCameraRelay.Target> outs = buildRelayOutputs();
-        relay.setBaseIntervalMs(0L);
-        relay.setOutputs(outs);
+        if (serviceStopping || cameraUnavailable || mainHandler == null) return;
+        final long epoch = intentEpoch;
+        if (Looper.myLooper() == Looper.getMainLooper()) { publishDesiredPreview(false); return; }
+        if (!mainHandler.post(new Runnable() { @Override public void run() {
+            if (epoch == intentEpoch && !serviceStopping && !cameraUnavailable) publishDesiredPreview(false);
+        }})) failClosed("output snapshot rejected");
     }
 
     /**
@@ -4322,140 +4262,98 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
      * 窗口数量变化（单窗 → 双窗 → 带编辑窗 → 带仪表投影）只影响 GL 的输出分发表，
      * 不再触发 CaptureSession 重建，因此不会再出现「双开 configure 失败 / 两路都饿死」。</p>
      */
-    private String collectTargets(java.util.ArrayList<Surface> targets) {
-        if (!glRelayMode || glRelayDisabled) {
-            return collectTargetsDirect(targets);
-        }
-        GlCameraRelay relay = ensureRelay();
-        java.util.ArrayList<GlCameraRelay.Target> outs = buildRelayOutputs();
-        if (outs.isEmpty()) {
-            // 所有窗口都不可见：清空 GL 输出表，交给上层释放相机
-            relay.setOutputs(outs);
-            relayWatchFrames = -1L;
-            relayWatchChangeMs = 0L;
-            // v1.67 beta6：延迟释放窗口内不改签名。窗口已收但相机与会话仍在保活，
-            // 此时若按空签名重建会话，1.2s 内再打灯就得重新协商 HAL，延迟释放失去意义。
-            // 相机侧目标恒为 relay 输入面，这里继续报 RELAY 与实际会话一致。
-            if (cameraLingerActive && cameraDevice != null) {
-                // v1.67 beta8 修复：延迟窗口内必须把 relay 输入面照旧上报为会话目标。
-                // beta6 只改签名不改 targets，doRebuildSession 见 targets 为空就直接
-                // releaseCamera()，熄灯纹理销毁回调一路把保活中的相机整机释放，
-                // L1 延迟销毁被击穿，还额外制造 close/open 竞态——就是"打灯更慢"的来源。
-                Surface lingerIn = relay.obtainInputSurface();
-                if (lingerIn != null && lingerIn.isValid()) {
-                    targets.add(lingerIn);
-                }
-                return "RELAY";
-            }
-            return "";
-        }
-        // v1.64：单路也走中转，不再切回直连。
-        // v1.63 在「单路直连 / 多路中转」之间来回切，屏幕状态只要抖动一次
-        // （TextureView 瞬间 0 尺寸、淡入期 alpha<1、刚 addView 还没 attach），
-        // 整条渲染链路就被换掉并重建会话——表现正是「刚出画面 2 秒又卡住」。
-        // 新版中转把每一路放在独立线程里画，单路走中转同样不会被下游队列阻塞，
-        // 因此这里统一走中转，让相机侧签名恒为 RELAY，全程不重建。
-        // 先确保 GL 就绪（同步初始化），再下发输出表，避免首帧输出被丢弃
-        Surface in = relay.obtainInputSurface();
-        if (in == null || !in.isValid()) {
-            glRelayMode = false;
-            serviceLog("GL 中转初始化失败，回退直连相机（多窗仍可能受限）");
-            return collectTargetsDirect(targets);
-        }
-        // v1.64：不再人为压帧率。每路输出已有独立线程，某一路慢只会影响它自己，
-        // 需要节流时由 GlCameraRelay 按该路真实 swap 耗时自适应下调，其余路照常满帧。
-        relay.setBaseIntervalMs(0L);
-        relay.setOutputs(outs);
-        targets.add(in);
-        relayWatchFrames = -1L;
-        relayWatchChangeMs = System.currentTimeMillis();
-        startRelayWatchdog();
-        // 相机侧签名恒定：只要中转在，目标集合永不变化 → 会话不再因窗口增减而重建
-        return "RELAY";
-    }
+
 
     /** v1.62：把编辑窗（左右两个都试一遍）从 GL 输出表摘除并释放其纹理。 */
-    private void detachRelayOutput(String key) {
-        if (glRelay == null) return;
-        SurfaceTexture st = null;
-        if (slotEditP != null && key.equals("EDIT_P")) st = slotEditP.currentTexture();
-        if (slotEditS != null && key.equals("EDIT_S")) st = slotEditS.currentTexture();
-        glRelay.detachOutput(key, st);
-        requestSessionRebuild(0L);
-    }
+
 
     /** v1.62：惰性创建 GL 中转。 */
     private GlCameraRelay ensureRelay() {
         if (glRelay == null) {
-            glRelay = new GlCameraRelay(BUFFER_W, BUFFER_H);
-            // v1.64：某一路输出阻塞时只隔离该路，这里换掉它的 TextureView 让画面回来
-            glRelay.setOutputStallListener(new GlCameraRelay.OutputStallListener() {
-                @Override
-                public void onOutputStalled(String key) {
-                    recoverStalledOutput(key);
+            final GlCameraRelay created = new GlCameraRelay(BUFFER_W, BUFFER_H);
+            glRelay = created;
+            created.setOutputStallListener(new GlCameraRelay.OutputStallListener() {
+                @Override public void onOutputStalled(final String key, final Object targetIdentity) {
+                    final long epoch = intentEpoch;
+                    if (!bgHandler.post(new Runnable() { @Override public void run() {
+                        if (created == glRelay && epoch == intentEpoch && !serviceStopping)
+                            recoverStalledOutput(key, targetIdentity);
+                    }})) failClosed("output failure delivery rejected");
                 }
             });
+            created.setOutputUnavailableListener(new GlCameraRelay.OutputUnavailableListener() {
+                @Override public void onOutputUnavailable(final String key, final Object identity, final String reason) {
+                    final long epoch = intentEpoch;
+                    if (!bgHandler.post(new Runnable() { @Override public void run() {
+                        if (created != glRelay || epoch != intentEpoch || serviceStopping || !cameraWanted) return;
+                        boolean expected = false;
+                        for (GlCameraRelay.Target target : desiredPreview.outputs)
+                            if (target.key.equals(key) && target.identity() == identity) expected = true;
+                        if (expected) isolateOutput(key, identity, epoch, created, reason);
+                    }})) failClosed("resource failure delivery rejected");
+                }
+            });
+            startRelayWatchdog();
         }
         return glRelay;
     }
 
-    /**
-     * v1.64：某一路 GL 输出被判定阻塞（该路 swap 未返回）时的自愈入口。
-     *
-     * <p>阻塞的是「这一路到它自己的 TextureView 队列」这一段，所以解药就是换掉那一路的
-     * TextureView：新 SurfaceTexture = 全新 BufferQueue = 全新读端，旧队列连同卡住的
-     * swap 一起报废，其他窗口与相机输入全程不受影响。</p>
-     */
-    /** v1.69：自愈冷却台账 key -> [窗口起点ms, 窗口内已修次数]。 */
-    private final java.util.HashMap<String, long[]> stallHealHistory = new java.util.HashMap<>();
-
-    /** v1.69：自愈冷却窗口。 */
-    private static final long HEAL_WINDOW_MS = 30000L;
-
-    /** v1.69：同一路在一个冷却窗口内最多修几次。 */
-    private static final int HEAL_MAX_PER_WINDOW = 2;
-
-    private void recoverStalledOutput(final String key) {
-        if (mainHandler == null) return;
-        mainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    // v1.69：自愈节流。判死一次就换一次纹理，而新纹理出首帧本身要几百毫秒，
-                    // 这段时间里很容易再被判死一次，无节制地换下去就是「画面反复黑一下又回来」
-                    // 的卡死感（也正是「能跳出来」的来源）。同一路 30 秒内只修 2 次，
-                    // 第 3 次起只记录不动手，交给窗口显隐 / 下一次打灯自然重建。
-                    String hk = key == null ? "?" : key;
-                    long nowMs = System.currentTimeMillis();
-                    synchronized (stallHealHistory) {
-                        long[] rec = stallHealHistory.get(hk);
-                        if (rec == null || nowMs - rec[0] > HEAL_WINDOW_MS) {
-                            rec = new long[]{nowMs, 0L};
-                            stallHealHistory.put(hk, rec);
-                        }
-                        if (rec[1] >= HEAL_MAX_PER_WINDOW) {
-                            serviceLog("输出 " + hk + " 自愈冷却中（" + (HEAL_WINDOW_MS / 1000L)
-                                    + "s 内已修 " + rec[1] + " 次），本次只记录不动手");
-                            return;
-                        }
-                        rec[1]++;
-                        serviceLog("输出 " + hk + " 自愈第 " + rec[1] + " 次（窗口 "
-                                + (HEAL_WINDOW_MS / 1000L) + "s 内限 " + HEAL_MAX_PER_WINDOW + " 次）");
-                    }
-                    if ("P".equals(key)) {
-                        replaceSlotTexture(true);
-                    } else if ("S".equals(key)) {
-                        replaceSlotTexture(false);
-                    } else if (glRelay != null) {
-                        glRelay.detachOutput(key, null);
-                        sessionTargetSig = "";
-                        requestSessionRebuild(0L);
-                    }
-                } catch (Throwable t) {
-                    serviceLog("重启受阻输出失败：" + t);
-                }
+    /** Isolate only the failed sink. Encoder/edit failure does not stop healthy P/S video. */
+    private void isolateOutput(final String key, final Object identity, final long epoch,
+                               final GlCameraRelay relay, final String reason) {
+        if (!mainHandler.post(new Runnable() { @Override public void run() {
+            if (epoch != intentEpoch || serviceStopping || !cameraWanted || glRelay != relay) return;
+            TextureView view = "P".equals(key) ? textureView : "S".equals(key) ? bsdRightTextureView
+                    : "EDIT_P".equals(key) && slotEditP != null ? slotEditP.textureView
+                    : "EDIT_S".equals(key) && slotEditS != null ? slotEditS.textureView : null;
+            if ("ICL".equals(key)) {
+                if (icProjector.getInputSurface() != identity) return;
+                unavailableTargets.put(identity, Boolean.TRUE);
+                stopProjection();
+            } else {
+                if (view == null || view.getSurfaceTexture() != identity) return;
+                unavailableTargets.put(identity, Boolean.TRUE);
+                view.setVisibility(View.INVISIBLE);
+                TextView label = "P".equals(key) ? labelView : "S".equals(key) ? bsdRightLabelView
+                        : "EDIT_P".equals(key) && slotEditP != null ? (TextView) slotEditP.rootView.findViewById(R.id.overlay_label)
+                        : "EDIT_S".equals(key) && slotEditS != null ? (TextView) slotEditS.rootView.findViewById(R.id.overlay_label) : null;
+                if (label != null) label.setText("影像不可用，请关闭后重新开启");
             }
-        });
+            serviceLog("输出 " + key + " 不可用: " + reason);
+            publishDesiredPreview(false);
+        }})) failClosed("output isolation delivery rejected");
+    }
+
+    private void recoverStalledOutput(final String key, final Object targetIdentity) {
+        if (serviceStopping || cameraUnavailable || !cameraWanted) return;
+        final long epoch = intentEpoch;
+        final GlCameraRelay relay = glRelay;
+        if (!"P".equals(key) && !"S".equals(key)) {
+            isolateOutput(key, targetIdentity, epoch, relay, "output failed; automatic replacement unsupported");
+            return;
+        }
+        boolean expected = false;
+        for (GlCameraRelay.Target target : desiredPreview.outputs)
+            if (target.key.equals(key) && target.identity() == targetIdentity) expected = true;
+        if (!expected) return;
+        Long knownTargetId = outputFaultTargetIds.get(targetIdentity);
+        final long targetId = knownTargetId != null ? knownTargetId : ++nextOutputFaultTargetId;
+        final String operation = "output:" + relay.getGeneration() + ":" + key + ":" + targetId;
+        if (recoveryBudget.contains(operation)) return;
+        if (!recoveryBudget.admit(operation, RecoveryBudget.Kind.OUTPUT_REPLACE,
+                key, android.os.SystemClock.elapsedRealtime())) {
+            failClosed("output recovery budget exhausted: " + key); return;
+        }
+        outputFaultTargetIds.put(targetIdentity, targetId);
+        if (!mainHandler.post(new Runnable() { @Override public void run() {
+            if (epoch != intentEpoch || serviceStopping || cameraUnavailable || !cameraWanted || glRelay != relay) return;
+            if ("P".equals(key) && slotPShown && textureView != null
+                    && textureView.getSurfaceTexture() == targetIdentity) replaceSlotTexture(true);
+            else if ("S".equals(key) && slotSShown && bsdRightTextureView != null
+                    && bsdRightTextureView.getSurfaceTexture() == targetIdentity) replaceSlotTexture(false);
+            else if ("P".equals(key) || "S".equals(key)) return;
+            else isolateOutput(key, targetIdentity, epoch, relay, "output recovery unsupported");
+        }})) failClosed("output recovery rejected");
     }
 
     /**
@@ -4495,12 +4393,12 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         // 否则 relay 会继续往死纹理 swap（第二次卡死的入口）
         if (glRelay != null) {
             try {
-                glRelay.detachOutput(primary ? "P" : "S", old.getSurfaceTexture());
+                glRelay.detachOutput(primary ? "P" : "S", null);
             } catch (Throwable ignored) {
             }
         }
-        // 先解绑再移除：st 释放会让卡在 swap 里的旧线程立刻返回并退出
-        old.setSurfaceTextureListener(null);
+        // Removing the View transfers its texture only through the destroyed callback.
+        // Keep the listener: destroyed transfers exact old texture ownership to the registry.
         ((android.view.ViewGroup) old.getParent() == null ? root
                 : (android.view.ViewGroup) old.getParent()).removeView(old);
 
@@ -4526,13 +4424,30 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
      * 一次性记成一条，直接区分三个候选：
      * A 主窗被标 paused（记录里「暂停=1」）；
      * B relay 正常 swap 但主窗不再显示（「末次swap=xxms前」很小、回调却不涨）；
-     * C 已降级直连（「中转=已降级直连」）。</p>
+     * C 中转明确不可用。消费进展不保证物理上屏。</p>
      *
      * <p>只读 service 自身状态与 relay 表，不碰 TextureView / View 属性，
      * 因此可以在 bgHandler 上安全执行。</p>
      */
+    /** Main-side safety guard: a blocked camera actor cannot run its own deadlines. */
+    private void checkCameraOwnerLiveness(long now) {
+        if (serviceStopping || cameraUnavailable || !cameraWanted) return;
+        if (ownerHeartbeatMs == 0L) ownerHeartbeatMs = now;
+        if (now - ownerHeartbeatMs > 10000L) {
+            failClosed("camera owner unresponsive; native cleanup remains queued");
+            return;
+        }
+        final long epoch = intentEpoch;
+        if (!heartbeatQueued.compareAndSet(false, true)) return;
+        if (!bgHandler.post(new Runnable() { @Override public void run() {
+            heartbeatQueued.set(false);
+            if (epoch == intentEpoch && !serviceStopping) ownerHeartbeatMs = android.os.SystemClock.elapsedRealtime();
+        }})) { heartbeatQueued.set(false); failClosed("camera heartbeat rejected"); }
+    }
+
     private void checkPFrameProbe() {
-        final long now = System.currentTimeMillis();
+        final long now = android.os.SystemClock.elapsedRealtime();
+        checkCameraOwnerLiveness(now);
         final GlCameraRelay relay = glRelay;
         // v1.67 beta4：窗口是否在屏以 View 为准。beta3 只认 slotPShown，一旦状态位与
         // 实际窗口错位（slotPShown=false 但窗口仍挂在 WindowManager 上），探针就永远沉默。
@@ -4614,7 +4529,8 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         sb.append("主窗回调共").append(pUpdatedTotal).append("次");
         sb.append(" 相机=").append(cameraDevice != null ? "就绪" : "空");
         sb.append(" 会话重建中=").append(sessionCreating ? 1 : 0);
-        sb.append(" 中转=").append(glRelayMode ? (glRelayDisabled ? "已降级直连" : "在用") : "未启用");
+        sb.append(" 中转=").append(cameraUnavailable ? "不可用" : glRelay != null ? "在用" : "未启用");
+        sb.append(" 会话目标=").append(sessionTargetSig);
         if (relay != null) {
             sb.append(" 输入帧=").append(relay.getFrameCount());
             sb.append(" 输出表=").append(relay.outputCount());
@@ -4662,6 +4578,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
 
     /** 启动主窗探针巡检（幂等；中转与直连两条路径都会调）。 */
     private void startPFrameProbe() {
+        if (serviceStopping) return;
         // v1.67 beta4：巡检从 bgHandler 迁到主线程 Handler。beta3 挂在 camera-bg 上，
         // 只要 bgThread 被 quitSafely（停服务/重建）或 postDelayed 返回 false，
         // pProbeRunning 就永久停在 true，探针彻底沉默又没有任何提示——
@@ -4713,57 +4630,20 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
     private void startRelayWatchdog() {
         if (bgHandler == null) return;
         bgHandler.removeCallbacks(relayStallWatchdog);
-        bgHandler.postDelayed(relayStallWatchdog, 800L);
+        if (!bgHandler.postDelayed(relayStallWatchdog, 800L)) failClosed("relay watchdog scheduling rejected");
         // v1.67 beta3：主窗更新探针随中转一起起来（幂等）
         startPFrameProbe();
     }
 
-    /**
-     * v1.67：中转资源压力处理。
-     *
-     * <p>分级降级：单路卡死由 GlCameraRelay 内部的「release 承载面 + 僵尸收尸」无感解决，
-     * 不惊动上层；只有收不了（线程确实不退、僵尸超限、或连续解套无效）才整实例重建。
-     * 整实例重建 = 丢掉 relay 实例 + 重建相机会话，代价约 1 秒黑屏，自动恢复。
-     * 60 秒内超过 2 次则降级直连单窗：少一路画面，但绝不再反复黑屏。</p>
-     */
+    /** Only an explicit failure request escalates. Normal pending retirement is not pressure. */
     private void handleRelayLeakPressure() {
         GlCameraRelay relay = glRelay;
-        if (!glRelayMode || relay == null) return;
-        boolean request = relay.consumeFullRebuildRequest();
-        int leaked = relay.getLeakedOutputs();
-        if (!request && leaked <= 0) return;
-        long now = System.currentTimeMillis();
-        if (now - lastRelayFullRebuildMs < 60000L) {
-            relayFullRebuildCount++;
-        } else {
-            relayFullRebuildCount = 1;
-        }
-        lastRelayFullRebuildMs = now;
-        serviceLog("中转资源压力：泄漏输出 " + leaked + " 路，整实例重建（60s 内第 "
-                + relayFullRebuildCount + " 次，解套有效=" + relay.isSurfaceReleaseEffective() + "）");
-        if (relayFullRebuildCount > 2) {
-            glRelayDisabled = true;
-            serviceLog("60s 内整实例重建超过 2 次，降级直连（双窗少一路，但不再黑屏）");
-        }
-        glRelay = null;
-        try {
-            relay.release();
-        } catch (Throwable t) {
-            serviceLog("释放旧中转失败：" + t);
-        }
-        relayWatchFrames = -1L;
-        relayWatchChangeMs = now;
-        sessionTargetSig = "";
-        sessionReqSeq++;
-        requestSessionRebuild(0L);
+        if (relay == null || !relay.consumeFullRebuildRequest()) return;
+        recoverCamera(RecoveryBudget.Kind.RELAY_REBUILD, "relay:" + relay.getGeneration(),
+                "relay requested retirement", true);
     }
 
-    /**
-     * v1.63：中转停帧看门狗。
-     * 中转线程一旦阻塞在 eglSwapBuffers 上就永不返回，之后 setOutputs / detachOutput /
-     * release 全部排队不执行，画面永久冻在最后一帧。这里以「帧计数是否还在增长」为判据：
-     * 1.5s 不增长即判定中转已死，立刻放弃中转、回退直连并重建会话，先把画面救回来。
-     */
+    /** Monotonic input-progress check; escalation shares the episode's fixed recovery budget. */
     private final Runnable relayStallWatchdog = new Runnable() {
         @Override
         public void run() {
@@ -4774,289 +4654,81 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
             } catch (Throwable t) {
                 serviceLog("中转看门狗异常：" + t);
             }
-            if (bgHandler != null && glRelayMode && !glRelayDisabled && glRelay != null) {
-                bgHandler.postDelayed(this, 800L);
+            if (bgHandler != null && !serviceStopping && !cameraUnavailable && glRelay != null) {
+                if (!bgHandler.postDelayed(this, 800L)) failClosed("relay watchdog rescheduling rejected");
             }
         }
     };
 
     private void checkRelayStall() {
         GlCameraRelay relay = glRelay;
-        if (!glRelayMode || relay == null) return;
-        // v1.65：每个巡检周期对账一次输出表——窗口纹理换了、某路被摘掉、显隐与表不符，
-        // 都在这里被纠正，绝不把「表里没有这一路」留到下一次触发。
-        refreshRelayOutputs();
-        // v1.64：没有任何输出（窗口全关 → 上层已释放相机）时不该判停帧
-        if (relay.outputCount() <= 0) {
-            relayWatchChangeMs = System.currentTimeMillis();
-            return;
+        if (relay == null || serviceStopping || cameraUnavailable || !cameraWanted) return;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (relay.outputCountActive() <= 0 || cameraDevice == null || cameraOpening || sessionCreating) {
+            relayWatchChangeMs = now; return;
         }
-        // v1.67：以下状态本来就该没有新帧，绝不能判「中转停帧」并 abandon。
-        // 旧实现的每一次误判都要整实例重建，泄漏的 EGLSurface 与线程正是从这里累积起来的。
-        if (cameraDevice == null || cameraOpening || sessionCreating) {
-            relayWatchChangeMs = System.currentTimeMillis();
-            return;
-        }
-        if (relay.outputCountActive() <= 0) {
-            // 所有输出都处于可见性暂停（面板淡出/收起），不算停帧
-            relayWatchChangeMs = System.currentTimeMillis();
-            return;
-        }
-        long now = System.currentTimeMillis();
-        long fc = relay.getFrameCount();
-        if (fc != relayWatchFrames) {
-            relayWatchFrames = fc;
-            relayWatchChangeMs = now;
-            return;
-        }
-        if (relayWatchChangeMs <= 0L) {
-            relayWatchChangeMs = now;
-            return;
-        }
-        long stalled = now - relayWatchChangeMs;
-        if (stalled < 1200L) return;
-        relayStallCount++;
-        relayLastStallMs = now;
-        serviceLog("GL 中转 " + stalled + "ms 无新帧，重建中转（第 "
-                + relayStallCount + " 次）");
-        // v1.64：每路输出已在独立线程里画，单路阻塞不会再拖死相机输入，
-        // 因此整体停帧只可能是输入线程自身异常。这里不切直连、不收起次级窗
-        // （那等于牺牲双路画面），只把中转整个重建一次，窗口与画面参数原样保留。
-        if (relayStallCount >= 4) {
-            glRelayDisabled = true;
-            serviceLog("GL 中转连续 4 次停帧，回退直连（单窗可出画面）");
-        }
-        glRelay = null;
-        relay.abandon();
-        relayWatchFrames = -1L;
-        relayWatchChangeMs = now;
-        sessionTargetSig = "";
-        sessionReqSeq++;
-        requestSessionRebuild(0L);
+        long frames = relay.getFrameCount();
+        if (frames != relayWatchFrames) { relayWatchFrames = frames; relayWatchChangeMs = now; return; }
+        if (relayWatchChangeMs == 0L) { relayWatchChangeMs = now; return; }
+        if (now - relayWatchChangeMs < 1200L) return;
+        recoverCamera(RecoveryBudget.Kind.RELAY_REBUILD, "relay:" + relay.getGeneration(), "relay input stalled", true);
     }
 
-    /** v1.61 及以前的多 target 直连实现：仅作为 GL 中转不可用时的兜底。 */
-    /** 收集当前所有预览目标（主窗 / BSD 右窗 / 编辑窗 / 仪表投影），并生成签名。 */
-    private String collectTargetsDirect(java.util.ArrayList<Surface> targets) {
-        // v1.67 beta3：直连兜底路径也要把主窗探针带起来
-        startPFrameProbe();
-        StringBuilder sig = new StringBuilder();
-        // v1.60_beta4：只把「当前真正可见」的槽位加入输出目标。
-        // 旧实现不看 slotPShown/slotSShown，隐藏槽位（alpha=0 + 移到 -30000）的 TextureView
-        // 仍然 available，于是它一直占着一路编码输出面：编辑窗出现时目标变成 3 路，
-        // 车机 HAL 协商不过来 → 编辑窗拿不到帧（空白框），而拖动/缩放（View 层）却正常。
-        if (textureView != null && textureView.isAvailable()
-                && textureView.getSurfaceTexture() != null) {
-            SurfaceTexture st = textureView.getSurfaceTexture();
-            st.setDefaultBufferSize(BUFFER_W, BUFFER_H);
-            bufferW = BUFFER_W;
-            bufferH = BUFFER_H;
-            if (previewSurface == null || previewSurfaceTex != st) {
-                if (previewSurface != null) {
-                    pendingSurfaceRelease.add(previewSurface);
-                    previewSurface = null;
-                }
-                previewSurface = new Surface(st);
-                previewSurfaceTex = st;
-            }
-            // v1.60_beta4：Surface 保活复用，但只有槽位可见时才作为输出目标。
-            // 隐藏槽位（alpha=0 + 移屏）不再占一路编码输出面——这是编辑窗/设置页预览
-            // 出空白框的直接原因（3 路目标超出车机 HAL 协商能力，新窗拿不到帧）。
-            if (slotPShown) {
-                targets.add(previewSurface);
-            // v1.60_beta1：签名必须包含 Surface 实例身份。窗口重建后 TextureView 会给出
-            // 全新 SurfaceTexture，但旧签名只记“有没有主窗”，与 sessionTargetSig 相同，
-            // doRebuildSession 直接跳过 → 会话仍向已失效的旧 Surface 出帧，画面永久冻在
-            // 最后一帧。加入 identityHashCode 后，实例一换签名必变，强制重建会话。
-            sig.append('M').append(Integer.toHexString(System.identityHashCode(previewSurface)));
-            }
-        } else if (previewSurface != null) {
-            // 主窗已不可用：把旧 Surface 从会话摘除并延后释放
-            pendingSurfaceRelease.add(previewSurface);
-            if (previewSurfaceTex != null) pendingTexRelease.add(previewSurfaceTex);
-            previewSurface = null;
-            previewSurfaceTex = null;
-        }
-        if (bsdRightTextureView != null && bsdRightTextureView.isAvailable()
-                && bsdRightTextureView.getSurfaceTexture() != null) {
-            SurfaceTexture rst = bsdRightTextureView.getSurfaceTexture();
-            if (bsdRightSurface == null || bsdRightSurfaceTex != rst) {
-                if (bsdRightSurface != null) {
-                    pendingSurfaceRelease.add(bsdRightSurface);
-                    bsdRightSurface = null;
-                }
-                rst.setDefaultBufferSize(BUFFER_W, BUFFER_H);
-                bsdRightSurface = new Surface(rst);
-                bsdRightSurfaceTex = rst;
-            }
-            // v1.60_beta4：同主窗——隐藏次级窗不占输出面，仅保活 Surface
-            if (slotSShown) {
-                targets.add(bsdRightSurface);
-                sig.append('R').append(Integer.toHexString(System.identityHashCode(bsdRightSurface)));
-            }
-        } else if (bsdRightSurface != null) {
-            // 右窗已关闭：摘除并延后释放
-            pendingSurfaceRelease.add(bsdRightSurface);
-            if (bsdRightSurfaceTex != null) pendingTexRelease.add(bsdRightSurfaceTex);
-            bsdRightSurface = null;
-            bsdRightSurfaceTex = null;
-        }
-        if (slotEditP != null) {
-            int before = targets.size();
-            slotEditP.addSurfaceTarget(targets);
-            if (targets.size() > before) {
-                sig.append('L').append(Integer.toHexString(
-                        System.identityHashCode(targets.get(targets.size() - 1))));
-            }
-        }
-        if (slotEditS != null) {
-            int before = targets.size();
-            slotEditS.addSurfaceTarget(targets);
-            if (targets.size() > before) {
-                sig.append('E').append(Integer.toHexString(
-                        System.identityHashCode(targets.get(targets.size() - 1))));
-            }
-        }
-        if (iclProjectionEnabled) {
-            Surface iclSurface = icProjector.getInputSurface();
-            if (iclSurface != null && iclSurface.isValid()) {
-                targets.add(iclSurface);
-                sig.append('I').append(Integer.toHexString(System.identityHashCode(iclSurface)));
-            }
-        }
-        return sig.toString();
-    }
+
 
     /** 用给定目标创建 CaptureSession（bgHandler 线程）。 */
-    private void startSession(final java.util.ArrayList<Surface> targets,
-                              final String newSig, final int seq) {
+    private void startSession(final SessionAttempt current) {
         try {
-            final CaptureRequest.Builder builder =
-                    cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-            for (Surface target : targets) {
-                builder.addTarget(target);
-            }
+            if (!current.current()) { current.releaseLease(); return; }
+            final CaptureRequest.Builder builder = current.device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+            builder.addTarget(current.input);
             builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
-            cameraDevice.createCaptureSession(targets,
+            current.device.createCaptureSession(java.util.Collections.singletonList(current.input),
                     new CameraCaptureSession.StateCallback() {
-                        @Override
-                        public void onConfigured(CameraCaptureSession session) {
-                            sessionCreatingSinceMs = 0L;
-                            sessionFailStreak = 0;
-                            if (seq != sessionReqSeq) {
-                                // 过期会话（期间又发起了新的重建）：直接关闭，不覆盖新状态
-                                try {
-                                    session.close();
-                                } catch (Exception ignored) {
-                                }
-                                return;
-                            }
-                            sessionCreating = false;
-                            if (cameraDevice == null) {
-                                try {
-                                    session.close();
-                                } catch (Exception ignored) {
-                                }
-                                return;
-                            }
-                            captureSession = session;
-                            sessionTargetSig = newSig;
-                            try {
-                                session.setRepeatingRequest(builder.build(), null, bgHandler);
-                            } catch (CameraAccessException e) {
-                                Log.e(TAG, "setRepeatingRequest failed", e);
-                            }
-                            sessionRetryCount = 0;
-                            // 新会话已生效，此时才可安全释放旧 Surface / SurfaceTexture
-                            flushPendingSurfaceRelease();
-                            runPendingSessionRebuild();
-                        }
-
-                        @Override
-                        public void onConfigureFailed(CameraCaptureSession session) {
-                            sessionCreating = false;
-                            sessionCreatingSinceMs = 0L;
-                            if (seq != sessionReqSeq) return;
-                            Log.e(TAG, "camera configure failed, targets=" + newSig);
-                            sessionTargetSig = "";
-                            if (sessionRetryCount < SESSION_RETRY_MAX) {
-                                sessionRetryCount++;
-                                Log.w(TAG, "会话 configure 失败，300ms 后第 "
-                                        + sessionRetryCount + " 次重建");
-                                bgHandler.postDelayed(new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        if (cameraDevice != null) {
-                                            doRebuildSession();
-                                        }
-                                    }
-                                }, 300L);
-                            } else {
-                                // v1.57 beta5：重试用尽不再静默留空框，整机重启相机自愈
-                                Log.e(TAG, "会话 configure 重试用尽，重启相机自愈");
-                                sessionRetryCount = 0;
-                                releaseCamera();
-                                bgHandler.postDelayed(new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        if (cameraDevice == null && hasAnyPreviewTarget()) {
-                                            openCamera();
-                                        }
-                                    }
-                                }, 350L);
-                            }
-                        }
-
-                        @Override
-                        public void onClosed(CameraCaptureSession session) {
-                            // 旧会话关闭完成（API 29+ 回调），推进排队中的重建
-                            runPendingSessionRebuild();
-                        }
-                    }, bgHandler);
-        } catch (Exception e) {
-            // v1.60_beta2：这里原来只捕获 CameraAccessException。一旦 Surface 已失效/重复，
-            // createCaptureRequest / createCaptureSession 抛的是 IllegalArgumentException 或
-            // IllegalStateException，漏出去后 sessionCreating 永久为 true，
-            // sessionRebuildRunnable 每 60ms 只做 postDelayed 无限等待，会话再也不重建 → 永久卡死。
-            sessionCreating = false;
-            sessionCreatingSinceMs = 0L;
-            sessionTargetSig = "";
-            Log.e(TAG, "createCaptureSession failed", e);
-            serviceLog("会话创建异常，已复位重建标志：" + e.getClass().getSimpleName());
-            recoverOverlayTexture("createCaptureSession " + e.getClass().getSimpleName());
+                @Override public void onConfigured(CameraCaptureSession session) {
+                    current.session = session;
+                    if (!current.current()) { session.close(); return; }
+                    try {
+                        session.setRepeatingRequest(builder.build(), null, bgHandler);
+                    } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
+                        failAttempt(current, "repeating rejected: " + e); return;
+                    }
+                    if (!current.current() || !CAMERA_LIFECYCLE.repeating(CameraOverlayService.this,
+                            current.open, current.device, current.token)) { session.close(); return; }
+                    captureSession = session;
+                    sessionTargetSig = current.signature;
+                    sessionCreating = false;
+                    sessionCreatingSinceMs = 0L;
+                    relayWatchFrames = -1L;
+                    relayWatchChangeMs = android.os.SystemClock.elapsedRealtime();
+                }
+                @Override public void onConfigureFailed(CameraCaptureSession session) {
+                    current.session = session;
+                    if (!current.current()) { session.close(); return; }
+                    failAttempt(current, "configure failed");
+                }
+                @Override public void onClosed(CameraCaptureSession session) {
+                    if (current.session != null && current.session != session) return;
+                    current.releaseLease();
+                    retiringAttempts.remove(current);
+                    if (current.current()) failAttempt(current, "active session unexpectedly closed");
+                }
+            }, bgHandler);
+        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
+            // Synchronous rejection: this attempt was not handed to HAL.
+            current.releaseLease();
+            failAttempt(current, "configure rejected: " + e);
         }
     }
 
-    /** 新会话生效后释放旧 Surface / SurfaceTexture。 */
-    private void flushPendingSurfaceRelease() {
-        for (Surface s : pendingSurfaceRelease) {
-            try {
-                s.release();
-            } catch (Exception ignored) {
-            }
-        }
-        pendingSurfaceRelease.clear();
-        for (SurfaceTexture st : pendingTexRelease) {
-            try {
-                st.release();
-            } catch (Exception ignored) {
-            }
-        }
-        pendingTexRelease.clear();
+    private void failAttempt(SessionAttempt current, String reason) {
+        if (!current.current() || current.failed) return;
+        current.failed = true;
+        recoverCamera(RecoveryBudget.Kind.CONFIGURE_RETRY, "session:" + current.token, reason, false);
     }
 
-    /** v1.57 beta4：重建请求在飞行期间被吞时，配置完成后串行补建一次。 */
-    private void runPendingSessionRebuild() {
-        if (!sessionRebuildPending) return;
-        sessionRebuildPending = false;
-        if (cameraDevice == null) return;
-        bgHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                createPreviewSession();
-            }
-        });
-    }
+    /** Legacy direct wrappers are never session targets in relay-only operation. */
+
 
     /**
      * 完整释放摄像头通道：关闭 CaptureSession / CameraDevice，
@@ -5064,116 +4736,34 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
      * 幂等，可被 onDestroy 与 onSurfaceTextureDestroyed 重复调用。
      */
     private void releaseCamera() {
-        // v1.67 beta8：记录释放时刻，供 openCamera 冷却判定
-        lastCameraClosedMs = System.currentTimeMillis();
-        cameraReopenPending = false;
-        // v1.67 beta6：完整释放即作废任何在途的延迟释放计时（幂等）
+        // Publish the stop intent before queueing any closure. No implicit reopen here.
+        cameraWanted = false;
+        advanceIntent();
         cancelCameraLinger();
-        // v1.57 beta4：完整释放时同步复位会话重建状态
-        sessionCreating = false;
-        sessionCreatingSinceMs = 0L;
-        sessionRebuildPending = false;
-        // v1.57 beta5：作废在途会话回调、撤销排队重建、清空签名与待释放队列
-        sessionReqSeq++;
-        sessionTargetSig = "";
-        cameraOpening = false;
-        if (bgHandler != null) {
-            bgHandler.removeCallbacks(sessionRebuildRunnable);
-        }
-        flushPendingSurfaceRelease();
-        // v1.52：Camera1 回退实例一并释放（幂等）
-        if (camera1Preview != null) {
-            camera1Preview.close();
-            camera1Preview = null;
-        }
-        if (captureSession != null) {
-            captureSession.close();
-            captureSession = null;
-        }
-        if (cameraDevice != null) {
-            cameraDevice.close();
-            cameraDevice = null;
-        }
-        if (previewSurface != null) {
-            previewSurface.release();
-            previewSurface = null;
-        }
-        previewSurfaceTex = null;
-        // v1.54：BSD 右浮窗 surface 一并释放
-        if (bsdRightSurface != null) {
-            bsdRightSurface.release();
-            bsdRightSurface = null;
-        }
-        bsdRightSurfaceTex = null;
-        // v1.54 beta4：BSD 编辑窗 surface 一并释放
-        if (bsdEditLeft != null) {
-            bsdEditLeft.releaseSurface();
-        }
-        if (bsdEditRight != null) {
-            bsdEditRight.releaseSurface();
-        }
-        // v1.60_beta2：窗口仍然存在时绝不销毁主窗 TextureView / 纹理。
-        // 旧实现无条件 setSurfaceTextureListener(null) + st.release() + textureView=null，
-        // 而 overlayView 还在窗口上（ensureOverlay 见 overlayView != null 直接 return），
-        // 结果主窗永久没有可用纹理：collectTargets 拿不到主窗目标，会话要么空、要么只剩
-        // 已释放的死 Surface，画面永久冻结在最后一帧——这就是“画面还是会卡死”的主因。
-        // 纹理只由 removeOverlay()（窗口真的移除）与 onDestroy() 负责销毁。
-        if (overlayView == null && textureView != null) {
-            textureView.setSurfaceTextureListener(null);
-            SurfaceTexture st = textureView.getSurfaceTexture();
-            if (st != null) {
-                try {
-                    st.release();
-                } catch (Exception ignored) {
-                }
-            }
-            textureView = null;
-        }
-        // v1.60_beta2：主窗仍然存在时，释放后必须立刻把纹理重新挂成会话目标并请求重连。
-        // 否则 releaseCamera 之后 collectTargets 没有任何主窗目标（previewSurface=null，
-        // 而 TextureView 非重建不会再次回调 onSurfaceTextureAvailable），
-        // 画面就永久黑屏/冻结在最后一帧——这是“画面还是会卡死”的另一条主因。
-        if (overlayView != null && textureView != null && textureView.isAvailable()) {
-            SurfaceTexture st = textureView.getSurfaceTexture();
-            if (st != null) {
-                try {
-                    st.setDefaultBufferSize(BUFFER_W, BUFFER_H);
-                    previewSurfaceTex = st;
-                    previewSurface = new Surface(st);
-                    requestSessionRebuild(80L);
-                    serviceLog("releaseCamera：主窗仍在，已重建纹理目标并请求重连会话");
-                } catch (Exception e) {
-                    Log.e(TAG, "releaseCamera 重建主窗 Surface 失败", e);
-                }
-            }
-        }
+        if (!closeQueued.compareAndSet(false, true)) return;
+        if (!bgHandler.post(new Runnable() { @Override public void run() {
+            try {
+                resumeAfterClose = false;
+                closeOnOwner();
+                GlCameraRelay relay = glRelay;
+                if (relay != null) relay.setOutputs(new java.util.ArrayList<GlCameraRelay.Target>());
+            } finally { closeQueued.set(false); }
+        }})) { closeQueued.set(false); failClosed("camera close delivery rejected"); }
     }
 
     /** v1.60_beta2：会话连续异常/纹理失效时的最后一层自愈——彻底重建主窗窗口与纹理。 */
     private void recoverOverlayTexture(String reason) {
-        sessionFailStreak++;
-        serviceLog("会话异常累计=" + sessionFailStreak + "（" + reason + "）");
-        if (sessionFailStreak < 3) {
-            return;
-        }
-        sessionFailStreak = 0;
-        serviceLog("连续 3 次会话异常，强制重建主窗窗口与纹理");
-        if (mainHandler == null) return;
-        mainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                boolean hadOverlay = overlayView != null;
-                removeOverlay();
-                if (hadOverlay || direction != null) {
-                    ensureOverlay();
-                }
-                openCamera();
-            }
-        });
+        failClosed("texture recovery requires explicit restart: " + reason);
     }
 
     @Override
     public void onDestroy() {
+        serviceStopping = true;
+        episodeResetPending = false;
+        explicitEnableSequence++;
+        cameraWanted = false;
+        advanceIntent();
+        stopProjection();
         if (monitor != null) {
             monitor.stop();
             monitor = null;
@@ -5201,10 +4791,9 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
             bgHandler.removeCallbacks(relayStallWatchdog);
         }
         // v1.62：释放 GL 中转（EGL 上下文 + 全部输出面）
-        if (glRelay != null) {
-            glRelay.release();
-            glRelay = null;
-        }
+        bgHandler.post(new Runnable() { @Override public void run() {
+            if (glRelay != null) { GlCameraRelay old = glRelay; glRelay = null; old.release(); }
+        }});
         removeOverlay();
         // v1.67 beta4：服务销毁必须把次级窗一并 removeView。否则旧 S 窗无引用留存，
         // 重开总开关后新旧两个 S 窗并存，旧的永远关不掉（关总开关后次级窗不消失的根因）。
@@ -5214,7 +4803,8 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         pProbeHandler.removeCallbacksAndMessages(null);
         pProbeRunning = false;
         if (sProbeOwner == this) sProbeOwner = null;
-        if (bgThread != null) bgThread.quitSafely();
+        // Process owner must remain alive for old HAL close/lease callbacks.
+
         serviceLog("前台服务已停止");
         super.onDestroy();
     }
@@ -5245,9 +4835,8 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         float camScale = CAM_SCALE_DEFAULT;
         float panX = 0f;
         float panY = 0f;
-        Surface editSurface = null;
-        // v1.60_beta3：记录 editSurface 对应的 SurfaceTexture，用于判断是否需要重建 Surface。
-        SurfaceTexture editSurfaceTex = null;
+
+
         final WindowManager.LayoutParams lp;
 
         BsdEditWindow(String side) {
@@ -5366,6 +4955,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         }
 
         void addToWindow() {
+        if (serviceStopping) return;
             try {
                 wm.addView(rootView, lp);
                 makeDraggable2(rootView);
@@ -5381,9 +4971,8 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
             // onSurfaceTextureDestroyed 直接 return true 让系统释放纹理，而会话 output
             // 目标列表里仍挂着这个已失效 Surface，HAL 向死输出面提交请求后会静默停帧，
             // 表现为退出编辑后主窗永久冻结在"编辑时画面"。
-            releaseSurface();
-            sessionTargetSig = "";
-            sessionRebuildPending = false;
+
+
             try {
                 wm.removeView(rootView);
             } catch (Exception ignored) {
@@ -5410,41 +4999,9 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         }
 
         /** 将本窗 TextureView 的 Surface 加入预览输出目标列表（配合 createPreviewSession）。 */
-        void addSurfaceTarget(java.util.ArrayList<Surface> targets) {
-            if (textureView == null || !textureView.isAvailable()
-                    || textureView.getSurfaceTexture() == null) {
-                return;
-            }
-            SurfaceTexture st = textureView.getSurfaceTexture();
-            st.setDefaultBufferSize(BUFFER_W, BUFFER_H);
-            // v1.60_beta3：旧实现每次 collectTargets 都 release 旧 Surface 再 new 一个新的，
-            // 后果有两个且都很致命：
-            //  ① 会话签名里记的是 Surface 实例身份，每次都是新实例 → 签名永远不相等
-            //    → doRebuildSession 认为"目标变了"，编辑态下无限重建会话；
-            //  ② 被 release 的恰恰是上一条会话正在出帧的输出面 → HAL 提交失败 → 编辑窗
-            //    画面全空（用户看到的"双击编辑后浮窗里没有影像"），还会连带主窗停帧。
-            // 现在：SurfaceTexture 不变就复用同一个 Surface；换了纹理才换 Surface，且旧
-            // Surface 只进延迟释放队列，等新会话 onConfigured 成功后再释放。
-            if (editSurface == null || editSurfaceTex != st || !editSurface.isValid()) {
-                if (editSurface != null) {
-                    pendingSurfaceRelease.add(editSurface);
-                    editSurface = null;
-                }
-                editSurface = new Surface(st);
-                editSurfaceTex = st;
-            }
-            targets.add(editSurface);
-        }
 
-        void releaseSurface() {
-            if (editSurface != null) {
-                // v1.60_beta3：不能立即 release——当前会话可能仍在向它出帧，
-                // 立刻释放会让 HAL 停帧。统一走延迟释放队列。
-                pendingSurfaceRelease.add(editSurface);
-                editSurface = null;
-                editSurfaceTex = null;
-            }
-        }
+
+
 
         private final TextureView.SurfaceTextureListener bsdEditSurfaceListener =
                 new TextureView.SurfaceTextureListener() {
@@ -5455,11 +5012,11 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
                         // v1.54 beta6：条件放宽为 cameraDevice 就绪即重建会话——createPreviewSession
                         // 内部会聚合本编辑窗 surface 并在无目标时自动释放，避免编辑态独立预览时
                         // 主窗纹理未就绪导致黑屏（surface 初始化时序修复）
-                        if (cameraDevice != null) {
+                        if (cameraWanted) {
                             // v1.60_beta4：作废签名强制真重建。旧实现在"隐藏主窗仍占目标"时
                             // 签名与编辑前的会话完全一致，doRebuildSession 直接 return，
                             // 编辑窗的 Surface 永远进不了会话 → 编辑窗永久空白。
-                            sessionTargetSig = "";
+
                             createPreviewSession();
                         }
                     }
@@ -5472,18 +5029,12 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
 
                     @Override
                     public boolean onSurfaceTextureDestroyed(SurfaceTexture st) {
-                                                // v1.62：GL 中转模式下该窗输出端由 relay 持有，先摘 EGLSurface 再释放纹理
-                        detachRelayOutput("EDIT_P");
-                        detachRelayOutput("EDIT_S");
-// v1.60：与主窗/右窗一致——先摘出会话目标并作废签名，再放行系统释放，
-                        // 避免会话继续向已销毁的编辑窗纹理出帧（会让整条会话停帧、主窗冻结）。
-                        releaseSurface();
-                        sessionTargetSig = "";
-                        if (cameraDevice != null && hasAnyPreviewTarget()) {
-                            requestSessionRebuild(80L);
-                        }
-                        return true;
-                    }
+            // Return false transfers only this exact texture. Retired old relays remain discoverable.
+            destroyedTextures.put(st, Boolean.TRUE);
+            GlCameraRelay.releaseTextureWhenUnused(st);
+            refreshRelayOutputs();
+            return false;
+        }
 
                     @Override
                     public void onSurfaceTextureUpdated(SurfaceTexture st) {
@@ -6028,7 +5579,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
             }
         }
         if (cameraDevice != null) {
-            createPreviewSession();
+            openCamera();
         } else {
             savedDirectionBeforeEdit = direction;
             direction = sd;
@@ -6070,7 +5621,7 @@ public class CameraOverlayService extends Service implements SignalMonitor.Liste
         // 在主窗始终可见时不会触发重建，会话仍停留在"含编辑窗 output"的旧配置上，
         // 主窗因此停帧在编辑时画面（Bug①）。
         if (cameraDevice != null && hasAnyPreviewTarget()) {
-            sessionTargetSig = "";
+
             requestSessionRebuild(120L);
         }
     }
